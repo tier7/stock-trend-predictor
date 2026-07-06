@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>{{ data.ticker }} - {{ data.name }}</h2>
+
+<div class="card">
+    <p><strong>Ostatnia cena:</strong> {{ data.last_price }} USD</p>
+    <p><strong>Wolumen:</strong> {{ data.volume }}</p>
+    <p><strong>Trend:</strong> {{ data.trend }}</p>
+    <p><strong>Prognoza modelu:</strong> {{ data.prediction }}</p>
+</div>
+
+<a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
+{% endblock %}
