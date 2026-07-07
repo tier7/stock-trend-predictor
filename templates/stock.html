@@ -10,5 +10,9 @@
     <p><strong>Prognoza modelu:</strong> {{ data.prediction }}</p>
 </div>
 
+<div>
+    {{ chart_html | safe }}
+</div>
+
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

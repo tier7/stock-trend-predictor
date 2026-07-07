@@ -1,5 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for
-import yfinance as yf
+from services.db import get_stock_data
+from services.data_updater import ensure_stock_data
+from services.chart_service import create_candlestick_chart
 app = Flask(__name__)
 
 COMPANIES = {
@@ -22,6 +24,10 @@ def index():
 @app.route("/stock/<ticker>")
 def stock(ticker):
     company_name = COMPANIES.get(ticker, "Nieznana spółka")
+
+    ensure_stock_data(ticker, "1d")
+    df = get_stock_data(ticker, "1d", 5)
+
     sample_data = {
         "ticker": ticker,
         "name": company_name,
@@ -30,9 +36,8 @@ def stock(ticker):
         "trend": "wzrostowy",
         "prediction": "cena prawdopodobnie wzrośnie"
     }
-    data = yf.download(ticker, period="10d", interval="1d")
-    print(data)
-    return render_template("stock.html", data=sample_data)
+    chart_html = create_candlestick_chart(df, ticker)
+    return render_template("stock.html",data=sample_data,chart_html=chart_html)
 
 
 if __name__ == "__main__":

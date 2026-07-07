@@ -1,8 +1,10 @@
 import sqlite3
-from data_fetcher import *
+import services.data_fetcher
 import pandas as pd
+from pathlib import Path
 
-DB_NAME = "stocks.db"
+BASE_DIR = Path(__file__).resolve().parent
+DB_NAME = BASE_DIR / "stocks.db"
 
 def get_connection():
     conn = sqlite3.connect(DB_NAME)
@@ -62,9 +64,4 @@ def get_stock_data(ticker, interval="1d", years=5):
     conn.close()
     return data
 
-if __name__ == "__main__":
-    create_table()
-    print("Table stock_prices created")
-    data = fetch_stock_data("AAPL")
-    save_stock_data(data)
 
