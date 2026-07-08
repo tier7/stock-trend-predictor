@@ -147,6 +147,44 @@ if (chartElement) {
             days: null
         }};
 
+    const intervalLabels = {
+    "1d": "1D",
+    "1w": "1W",
+    "1mo": "1M"
+    };
+
+    const rangeLabel = document.getElementById("chart-range-label");
+    const candleLabel = document.getElementById("chart-candle-label");
+
+    function updateChartLabels(range, interval) {
+        if (rangeLabel) {
+            rangeLabel.textContent = `Widok: ${range}`;
+            rangeLabel.style.display = "inline";
+        }
+
+        if (candleLabel) {
+            candleLabel.textContent = `Świece: ${intervalLabels[interval]}`;
+            candleLabel.style.display = "inline";
+        }
+    }
+
+    function hideRangeLabel() {
+        if (!rangeLabel) {
+            return;
+        }
+
+        rangeLabel.style.display = "none";
+    }
+    chartElement.addEventListener("wheel", hideRangeLabel, {
+        passive: true
+    });
+
+    chartElement.addEventListener("mousedown", hideRangeLabel);
+
+    chartElement.addEventListener("touchstart", hideRangeLabel, {
+        passive: true
+    });
+
     function setVisibleDays(data, days) {
         if (!data || data.length === 0) {
             return;
@@ -174,6 +212,7 @@ if (chartElement) {
 
     function loadCandles(range) {
         const config = rangeConfig[range];
+        updateChartLabels(range, config.interval);
 
         if (!config) {
             return;

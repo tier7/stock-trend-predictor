@@ -98,3 +98,10 @@ button {
 .chart-tooltip strong {
     color: #f0b90b;
 }
+
+#chart-range-label,
+#chart-candle-label {
+    margin-left: 12px;
+    color: #848e9c;
+    font-size: 13px;
+}
