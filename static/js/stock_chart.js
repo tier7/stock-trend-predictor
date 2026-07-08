@@ -124,36 +124,27 @@ if (chartElement) {
             return;
         }
 
-        fetch(`/api/stock/${ticker}/candles?interval=${config.interval}`)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error("Failed to load chart data");
-                }
+    fetch(`/api/stock/${ticker}/candles?interval=${config.interval}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error("Nie udało się pobrać danych dla tego tickera");
+            }
 
-                return response.json();
-            })
-            .then(data => {
-                console.log("Range:", range);
-                console.log("Interval:", config.interval);
-                console.log("Candles count:", data.length);
-                console.log("First candle:", data[0]);
-                console.log("Last candle:", data[data.length - 1]);
+            return response.json();
+        })
+        .then(data => {
+            candleSeries.setData(data);
 
-                candleSeries.setData(data);
-
-                if (!data || data.length === 0) {
-                    return;
-                }
-
-                if (range === "ALL") {
-                    chart.timeScale().fitContent();
-                } else {
-                    setVisibleDays(data, config.days);
-                }
-            })
-            .catch(error => {
-                console.error("Chart data loading error:", error);
-            });
+            if (range === "ALL") {
+                chart.timeScale().fitContent();
+            } else {
+                setVisibleDays(data, config.days);
+            }
+        })
+        .catch(error => {
+            console.error("Chart data loading error:", error);
+            chartElement.innerHTML = "<p style='color: white;'>Nie znaleziono danych dla tego tickera.</p>";
+        });
     }
 
     const buttons = document.querySelectorAll(".range-buttons button");

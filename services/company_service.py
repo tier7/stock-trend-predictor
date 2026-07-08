@@ -12,6 +12,10 @@ def ensure_stock_name(ticker):
     print(f"No data for {ticker} in companies table")
 
     name = fetch_company_name(ticker)
+
+    if name is None:
+        return ticker
+
     save_company_data(ticker, name)
 
     return name
