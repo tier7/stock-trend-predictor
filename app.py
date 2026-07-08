@@ -12,14 +12,14 @@ COMPANIES = {
     "NVDA": "Nvidia"
 }
 
-
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         ticker = request.form.get("ticker")
+        ticker = ticker.upper().strip()
         return redirect(url_for("stock", ticker=ticker))
 
-    return render_template("index.html", companies=COMPANIES)
+    return render_template("index.html")
 
 
 @app.route("/stock/<ticker>")

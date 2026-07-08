@@ -4,14 +4,7 @@
 <h2>Wybierz analizowaną spółkę</h2>
 
 <form method="POST">
-    <label for="ticker">Spółka:</label>
-
-    <select name="ticker" id="ticker">
-        {% for ticker, name in companies.items() %}
-            <option value="{{ ticker }}">{{ ticker }} - {{ name }}</option>
-        {% endfor %}
-    </select>
-
-    <button type="submit">Pokaż analizę</button>
+    <input type="text" name="ticker" placeholder="Input ticker symbol (e.g AAPL)">
+    <button type="submit">Szukaj</button>
 </form>
 {% endblock %}
