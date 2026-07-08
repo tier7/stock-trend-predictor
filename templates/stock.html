@@ -9,10 +9,27 @@
     <p><strong>Trend:</strong> {{ data.trend }}</p>
     <p><strong>Prognoza modelu:</strong> {{ data.prediction }}</p>
 </div>
+<div class="chart-card">
+    <div class="chart-topbar">
+        <div>
+            <strong>{{ data.ticker }}</strong>
+            <span>{{ data.name }}</span>
+        </div>
 
-<div>
-    {{ chart_html | safe }}
+        <div class="range-buttons">
+            <button data-range="1M">1M</button>
+            <button data-range="6M">6M</button>
+            <button data-range="1Y">1Y</button>
+            <button data-range="5Y">5Y</button>
+            <button data-range="ALL">ALL</button>
+        </div>
+    </div>
+
+    <div id="stock-chart" data-ticker="{{ data.ticker }}"></div>
 </div>
+
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js') }}"></script>
 
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

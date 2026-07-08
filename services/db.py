@@ -57,9 +57,11 @@ def get_stock_data(ticker, interval="1d", years=5):
 
     if years is None:
         query = "SELECT * FROM stock_prices WHERE ticker = ? AND interval = ? ORDER BY date ASC"
+        data = pd.read_sql_query(query, conn, params=(ticker, interval))
+
     else:
         query = "SELECT * FROM stock_prices WHERE ticker = ? AND interval = ? AND date >= date('now', ?) ORDER BY date ASC"
-    data = pd.read_sql_query(query, conn, params=(ticker, interval, f"-{years} years"))
+        data = pd.read_sql_query(query, conn, params=(ticker, interval, f"-{years} years"))
 
     conn.close()
     return data
