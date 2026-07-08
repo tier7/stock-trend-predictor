@@ -27,6 +27,19 @@ def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
     data = data[["ticker", "interval", "date", "open", "high", "low", "close", "volume", "dividends", "stock_splits"]]
     data["date"] = data["date"].dt.strftime("%Y-%m-%d")
     return data
+
+
+def fetch_company_name(ticker):
+    ticker = ticker.upper()
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        return (info.get("longName") or info.get("shortName") or ticker)
+
+    except Exception:
+        return ticker
+
+
 if __name__ == "__main__":
     df = fetch_stock_data("AAPL")
     print(df.head())

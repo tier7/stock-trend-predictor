@@ -10,7 +10,7 @@ def get_connection():
     conn = sqlite3.connect(DB_NAME)
     return conn
 
-def create_table():
+def create_tables():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute('''CREATE TABLE IF NOT EXISTS stock_prices (
@@ -27,6 +27,12 @@ def create_table():
         
     PRIMARY KEY (ticker, interval, date))
     ''')
+
+    cur.execute('''CREATE TABLE IF NOT EXISTS companies (
+    ticker TEXT PRIMARY KEY,
+    name TEXT NOT NULL)
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -49,7 +55,7 @@ def save_stock_data(data):
     cur.executemany("""INSERT OR REPLACE INTO stock_prices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
 
     conn.commit()
-    cur.close()
+    conn.close()
 
 def get_stock_data(ticker, interval="1d", years=5):
     conn = get_connection()
@@ -66,4 +72,29 @@ def get_stock_data(ticker, interval="1d", years=5):
     conn.close()
     return data
 
+def get_company_name_from_db(ticker):
+    conn = get_connection()
+    cur = conn.cursor()
 
+    ticker = ticker.upper()
+    cur.execute("SELECT name from companies WHERE ticker = ?", (ticker,))
+    row = cur.fetchone()
+    conn.close()
+
+    if row is None:
+        return None
+
+    return row[0]
+
+def save_company_data(ticker, name):
+    conn = get_connection()
+    cur = conn.cursor()
+    ticker = ticker.upper()
+
+    cur.execute("INSERT INTO companies VALUES (?, ?)", (ticker, name))
+
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    create_tables()

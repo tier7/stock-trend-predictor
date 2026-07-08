@@ -2,15 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 from services.db import get_stock_data
 from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
-from services.chart_service import create_candlestick_chart
+from services.company_service import ensure_stock_name
 app = Flask(__name__)
-
-COMPANIES = {
-    "AAPL": "Apple",
-    "MSFT": "Microsoft",
-    "TSLA": "Tesla",
-    "NVDA": "Nvidia"
-}
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -24,18 +17,15 @@ def index():
 
 @app.route("/stock/<ticker>")
 def stock(ticker):
-    company_name = COMPANIES.get(ticker, "Nieznana spółka")
-
-    ensure_stock_data(ticker, "1d")
-    df = get_stock_data(ticker, "1d", 5)
+    company_name = ensure_stock_name(ticker)
 
     sample_data = {
         "ticker": ticker,
         "name": company_name,
-        "last_price": 189.25,
-        "volume": 12345678,
-        "trend": "wzrostowy",
-        "prediction": "cena prawdopodobnie wzrośnie"
+        "last_price": "-",
+        "volume": "-",
+        "trend": "-",
+        "prediction": "-"
     }
     #chart_html = create_candlestick_chart(df, ticker)
     return render_template("stock.html", data=sample_data)
