@@ -34,7 +34,9 @@ if (chartElement) {
         timeScale: {
             borderColor: "#2b3139",
             timeVisible: true,
-            secondsVisible: false
+            secondsVisible: false,
+            minBarSpacing: 0.01,
+            rightOffset: 3
         },
 
         crosshair: {
@@ -68,61 +70,92 @@ if (chartElement) {
         ? chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions)
         : chart.addCandlestickSeries(candleOptions);
 
-    fetch(`/api/stock/${ticker}/candles`)
-        .then(response => response.json())
-        .then(data => {
-            candleSeries.setData(data);
-            chart.timeScale().fitContent();
-            setupRangeButtons(chart, data);
-        })
-        .catch(error => {
-            console.error("Chart data loading error:", error);
+    const rangeConfig = {
+        "1M": {
+            interval: "1d",
+            days: 30
+        },
+        "6M": {
+            interval: "1d",
+            days: 180
+        },
+        "1Y": {
+            interval: "1d",
+            days: 365
+        },
+        "5Y": {
+            interval: "1w",
+            days: 365 * 5
+        },
+        "ALL": {
+            interval: "1mo",
+            days: null
+        }};
+
+    function setVisibleDays(data, days) {
+        if (!data || data.length === 0) {
+            return;
+        }
+
+        const lastIndex = data.length - 1;
+        const lastDate = new Date(data[lastIndex].time);
+
+        const startDate = new Date(lastDate);
+        startDate.setDate(startDate.getDate() - days);
+
+        let fromIndex = data.findIndex(candle => {
+            return new Date(candle.time) >= startDate;
         });
 
-    window.addEventListener("resize", () => {
-        chart.applyOptions({
-            width: chartElement.clientWidth
+        if (fromIndex === -1) {
+            fromIndex = 0;
+        }
+
+        chart.timeScale().setVisibleLogicalRange({
+            from: fromIndex,
+            to: lastIndex
         });
-    });
-}
-
-function showAllData(chart, data) {
-    if (!data || data.length === 0) {
-        return;
     }
 
-    chart.timeScale().setVisibleLogicalRange({
-        from: 0,
-        to: data.length - 1
-    });
-}
+    function loadCandles(range) {
+        const config = rangeConfig[range];
 
-function setVisibleDays(chart, data, days) {
-    if (!data || data.length === 0) {
-        return;
+        if (!config) {
+            return;
+        }
+
+        fetch(`/api/stock/${ticker}/candles?interval=${config.interval}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Failed to load chart data");
+                }
+
+                return response.json();
+            })
+            .then(data => {
+                console.log("Range:", range);
+                console.log("Interval:", config.interval);
+                console.log("Candles count:", data.length);
+                console.log("First candle:", data[0]);
+                console.log("Last candle:", data[data.length - 1]);
+
+                candleSeries.setData(data);
+
+                if (!data || data.length === 0) {
+                    return;
+                }
+
+                if (range === "ALL") {
+                    chart.timeScale().fitContent();
+                } else {
+                    setVisibleDays(data, config.days);
+                }
+            })
+            .catch(error => {
+                console.error("Chart data loading error:", error);
+            });
     }
 
-    const lastIndex = data.length - 1;
-    const lastDate = new Date(data[lastIndex].time);
-
-    const startDate = new Date(lastDate);
-    startDate.setDate(startDate.getDate() - days);
-
-    let fromIndex = data.findIndex(candle => {
-        return new Date(candle.time) >= startDate;
-    });
-
-    if (fromIndex === -1) {
-        fromIndex = 0;
-    }
-
-    chart.timeScale().setVisibleLogicalRange({
-        from: fromIndex,
-        to: lastIndex
-    });
-}
-
-function setupRangeButtons(chart, data) {
     const buttons = document.querySelectorAll(".range-buttons button");
 
     buttons.forEach(button => {
@@ -132,39 +165,22 @@ function setupRangeButtons(chart, data) {
             buttons.forEach(btn => btn.classList.remove("active"));
             button.classList.add("active");
 
-            if (range === "ALL") {
-            showAllData(chart, data);
-            return;
-            }
+            loadCandles(range);
+        });
+    });
 
-            const daysByRange = {
-                "1M": 30,
-                "6M": 180,
-                "1Y": 365,
-                "5Y": 365 * 5
-            };
+    const defaultRange = "1Y";
+    const defaultButton = document.querySelector(`.range-buttons button[data-range="${defaultRange}"]`);
 
-            setVisibleDays(chart, data, daysByRange[range]);
+    if (defaultButton) {
+        defaultButton.classList.add("active");
+    }
 
-            const days = daysByRange[range];
+    loadCandles(defaultRange);
 
-            if (!days || data.length === 0) {
-                return;
-            }
-
-            const lastCandle = data[data.length - 1];
-            const lastDate = new Date(lastCandle.time);
-
-            const startDate = new Date(lastDate);
-            startDate.setDate(startDate.getDate() - days);
-
-            const from = startDate.toISOString().split("T")[0];
-            const to = lastDate.toISOString().split("T")[0];
-
-            chart.timeScale().setVisibleRange({
-                from: from,
-                to: to
-            });
+    window.addEventListener("resize", () => {
+        chart.applyOptions({
+            width: chartElement.clientWidth
         });
     });
 }

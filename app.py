@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from services.db import get_stock_data
 from services.data_updater import ensure_stock_data
+from services.resample_service import resample_data
 from services.chart_service import create_candlestick_chart
 app = Flask(__name__)
 
@@ -47,6 +48,8 @@ def stock_candles_api(ticker):
 
     if df.empty:
         return jsonify([])
+    interval = request.args.get("interval", "1d")
+    df = resample_data(df,interval)
 
     candles_df = df[["date", "open", "high", "low", "close"]].copy()
     candles_df = candles_df.rename(columns={"date": "time"})
