@@ -70,6 +70,61 @@ if (chartElement) {
         ? chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions)
         : chart.addCandlestickSeries(candleOptions);
 
+        const tooltip = document.createElement("div");
+    tooltip.className = "chart-tooltip";
+    chartElement.appendChild(tooltip);
+
+    function formatPrice(value) {
+        if (value === undefined || value === null) {
+            return "-";
+        }
+
+        return Number(value).toFixed(2);
+    }
+
+    chart.subscribeCrosshairMove(param => {
+        if (
+            !param.point ||
+            param.point.x < 0 ||
+            param.point.y < 0 ||
+            param.point.x > chartElement.clientWidth ||
+            param.point.y > chartElement.clientHeight
+        ) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        const candle = param.seriesData.get(candleSeries);
+
+        if (!candle) {
+            tooltip.style.display = "none";
+            return;
+        }
+
+        tooltip.innerHTML = `
+            <strong>${candle.time}</strong><br>
+            Open: ${formatPrice(candle.open)}<br>
+            High: ${formatPrice(candle.high)}<br>
+            Low: ${formatPrice(candle.low)}<br>
+            Close: ${formatPrice(candle.close)}
+        `;
+
+        let left = param.point.x + 15;
+        let top = param.point.y + 15;
+
+        if (left + 170 > chartElement.clientWidth) {
+            left = param.point.x - 180;
+        }
+
+        if (top + 120 > chartElement.clientHeight) {
+            top = param.point.y - 130;
+        }
+
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+        tooltip.style.display = "block";
+    });
+
     const rangeConfig = {
         "1M": {
             interval: "1d",

@@ -74,3 +74,27 @@ button {
     background: #f0b90b;
     color: #0b0e11;
 }
+
+#stock-chart {
+    position: relative;
+}
+
+.chart-tooltip {
+    position: absolute;
+    display: none;
+    background: rgba(30, 35, 41, 0.95);
+    color: #eaecef;
+    border: 1px solid #2b3139;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    z-index: 10;
+    min-width: 150px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.chart-tooltip strong {
+    color: #f0b90b;
+}
