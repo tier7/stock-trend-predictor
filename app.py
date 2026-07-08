@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
-from services.db import get_stock_data
+from services.db import get_stock_data, get_latest_stock_summary
 from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
 import re
+
 
 app = Flask(__name__)
 
@@ -40,17 +41,20 @@ def stock(ticker):
 
 
     company_name = ensure_stock_name(ticker)
+    summary = get_latest_stock_summary(ticker, "1d")
 
-    sample_data = {
+    stock_info = {
         "ticker": ticker,
         "name": company_name,
-        "last_price": "-",
-        "volume": "-",
-        "trend": "-",
+        "last_price": round(summary["last_price"], 2),
+        "volume": summary["volume"],
+        "last_date": summary["last_date"],
+        "price_change": round(summary["price_change"], 2) if summary["price_change"] is not None else "-",
+        "price_change_percent": round(summary["price_change_percent"], 2) if summary["price_change_percent"] is not None else "-",
         "prediction": "-"
     }
     #chart_html = create_candlestick_chart(df, ticker)
-    return render_template("stock.html", data=sample_data)
+    return render_template("stock.html", data=stock_info)
 
 @app.route("/api/stock/<ticker>/candles")
 def stock_candles_api(ticker):

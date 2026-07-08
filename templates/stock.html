@@ -4,10 +4,11 @@
 <h2>{{ data.ticker }} - {{ data.name }}</h2>
 
 <div class="card">
-    <p><strong>Ostatnia cena:</strong> {{ data.last_price }} USD</p>
-    <p><strong>Wolumen:</strong> {{ data.volume }}</p>
-    <p><strong>Trend:</strong> {{ data.trend }}</p>
-    <p><strong>Prognoza modelu:</strong> {{ data.prediction }}</p>
+    <p>Ostatnia cena: {{ data.last_price }}</p>
+    <p>Wolumen: {{ data.volume }}</p>
+    <p>Data: {{ data.last_date }}</p>
+    <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
+    <p>Predykcja modelu: {{data.prediction}}</p>
 </div>
 <div class="chart-card">
     <div class="chart-topbar">

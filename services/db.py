@@ -96,5 +96,52 @@ def save_company_data(ticker, name):
     conn.commit()
     conn.close()
 
+
+def get_latest_stock_summary(ticker, interval="1d"):
+    conn = get_connection()
+
+    ticker = ticker.upper()
+
+    query = """
+        SELECT date, close, volume
+        FROM stock_prices
+        WHERE ticker = ? AND interval = ?
+        ORDER BY date DESC
+        LIMIT 2
+    """
+
+    data = pd.read_sql_query(query, conn, params=(ticker, interval))
+    conn.close()
+    if data.empty:
+        return None
+
+    latest = data.iloc[0]
+    last_price = float(latest["close"])
+    volume = int(latest["volume"])
+    last_date = latest["date"]
+
+    previous_price = None
+    price_change = None
+    price_change_percent = None
+    trend = "-"
+
+    if len(data) > 1:
+        previous = data.iloc[1]
+        previous_price = float(previous["close"])
+
+        price_change = last_price - previous_price
+
+        if previous_price != 0:
+            price_change_percent = (price_change / previous_price) * 100
+
+    return {
+        "last_price": last_price,
+        "volume": volume,
+        "last_date": last_date,
+        "previous_price": previous_price,
+        "price_change": price_change,
+        "price_change_percent": price_change_percent,
+    }
+
 if __name__ == "__main__":
     create_tables()
