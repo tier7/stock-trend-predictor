@@ -1,0 +1,117 @@
+import pandas as pd
+
+def calc_sma(data, period):
+    data = data.copy()
+    return data["close"].rolling(window=period).mean()
+
+def calc_ema(data, period):
+    data = data.copy()
+    return data["close"].ewm(span=period, adjust=False).mean()
+
+def calc_macd(data, slow_period = 26, fast_period = 12, signal_period = 9):
+    data = data.copy()
+    ema_fast = calc_ema(data, fast_period)
+    ema_slow = calc_ema(data, slow_period)
+
+    macd = ema_fast - ema_slow
+    signal = macd.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd - signal
+    return macd, signal, histogram
+
+def calc_fibonacci_retracement(data, period=None):
+    data = data.copy()
+    if period is not None:
+        data = data.tail(period)
+
+    high = data["high"].max()
+    low = data["low"].min()
+    diff = high - low
+
+    return {
+        "23.6%": high - diff * 0.236,
+        "38.2%": high - diff * 0.382,
+        "50.0%": high - diff * 0.5,
+        "61.8%": high - diff * 0.618,
+    }
+
+
+def calc_stochastic_oscillator(data, period=14):
+    data = data.copy()
+    lowest_low = data["low"].rolling(window=period).min()
+    highest_high = data["high"].rolling(window=period).max()
+
+    pk = (data["close"] - lowest_low) / (highest_high - lowest_low) * 100
+    return pk
+
+def calc_bollinger_bands(data, k=2, n=20):
+    data = data.copy()
+    mid_band = calc_sma(data, n)
+    rolling_std = data["close"].rolling(window=n).std()
+    upper_band = mid_band + k * rolling_std
+    lower_band = mid_band - k * rolling_std
+    return mid_band, upper_band, lower_band
+
+def calc_rsi(data, period):
+    data = data.copy()
+    change = data["close"].diff()
+    gains = change.clip(lower=0)
+    losses = -change.clip(upper=0)
+
+    a = gains.rolling(window=period).mean()
+    b = losses.rolling(window=period).mean()
+
+    rs = a / b
+    rsi = 100 - 100 / (1 + rs)
+    return rsi
+
+def calc_adx(data, period):
+    data = data.copy()
+
+    upmove = data["high"].diff()
+    downmove = -data["low"].diff()
+
+    pdm = upmove.where((upmove > downmove) & (upmove > 0), 0)
+    mdm = downmove.where((downmove > upmove) & (downmove > 0), 0)
+    previous_close = data["close"].shift(1)
+    tr1 = data["high"] - data["low"]
+    tr2 = (data["high"] - previous_close).abs()
+    tr3 = (data["low"] - previous_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    pdm_avg = pdm.rolling(window=period).mean()
+    mdm_avg = mdm.rolling(window=period).mean()
+    tr_avg = tr.rolling(window=period).mean()
+
+    plus_di = 100*pdm_avg/tr_avg
+    minus_di = 100*mdm_avg/tr_avg
+
+    dx = 100 * abs(plus_di- minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period).mean()
+
+    return adx
+
+def calc_standard_deviation(data, period):
+    data = data.copy()
+    return data["close"].rolling(window=period).std()
+
+def calc_ichimoku_cloud(data, conversion_period=9, base_period=26, span_b_period=52, displacement=26):
+    data = data.copy()
+
+    conversion_high = data["high"].rolling(window=conversion_period).max()
+    conversion_low = data["low"].rolling(window=conversion_period).min()
+    tenkan_sen = (conversion_high + conversion_low) / 2
+
+    base_high = data["high"].rolling(window=base_period).max()
+    base_low = data["low"].rolling(window=base_period).min()
+    kijun_sen = (base_high + base_low) / 2
+
+    senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(displacement)
+
+    span_b_high = data["high"].rolling(window=span_b_period).max()
+    span_b_low = data["low"].rolling(window=span_b_period).min()
+    senkou_span_b = ((span_b_high + span_b_low) / 2).shift(displacement)
+
+    chikou_span = data["close"].shift(-displacement)
+
+    return tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span
+
