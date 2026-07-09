@@ -1,5 +1,6 @@
+from math import isfinite
 from flask import Flask, render_template, request, redirect, url_for, jsonify
-from services.db import get_stock_data, get_latest_stock_summary
+from services.db import get_stock_data, get_latest_stock_summary, get_recent_stock_prices
 from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
@@ -8,25 +9,94 @@ import re
 
 app = Flask(__name__)
 
+FEATURED_STOCKS = (
+    {"ticker": "AAPL", "name": "Apple"},
+    {"ticker": "NVDA", "name": "Nvidia"},
+    {"ticker": "GOOGL", "name": "Google"},
+    {"ticker": "MSFT", "name": "Microsoft"},
+    {"ticker": "AMZN", "name": "Amazon"},
+    {"ticker": "META", "name": "Meta"},
+)
+
 
 def is_valid_ticker_format(ticker):
     return re.match(r"^[A-Z0-9.\-]{1,15}$", ticker) is not None
 
+def build_sparkline_points(values, width=184, height=56, padding=4):
+    if not values:
+        values = [1, 1]
+    elif len(values) == 1:
+        values = [values[0], values[0]]
+
+    min_value = min(values)
+    max_value = max(values)
+    value_range = max_value - min_value
+    x_step = (width - padding * 2) / (len(values) - 1)
+    points = []
+
+    for index, value in enumerate(values):
+        x = padding + index * x_step
+        if value_range == 0:
+            y = height / 2
+        else:
+            y = height - padding - ((value - min_value) / value_range) * (height - padding * 2)
+        points.append(f"{x:.1f},{y:.1f}")
+
+    return " ".join(points)
+
+def get_featured_stocks():
+    featured_stocks = []
+
+    for stock in FEATURED_STOCKS:
+        ensure_stock_data(stock["ticker"], "1d")
+        recent_prices = get_recent_stock_prices(stock["ticker"], "1d", 7)
+        closes = []
+
+        if not recent_prices.empty:
+            for value in recent_prices["close"].tolist():
+                close = float(value)
+                if isfinite(close):
+                    closes.append(close)
+
+        change_percent = None
+        if len(closes) > 1 and closes[0] != 0:
+            change_percent = ((closes[-1] - closes[0]) / closes[0]) * 100
+
+        if change_percent is None:
+            trend_class = "is-flat"
+            change_label = "brak danych"
+        elif change_percent >= 0:
+            trend_class = "is-up"
+            change_label = f"+{change_percent:.1f}%"
+        else:
+            trend_class = "is-down"
+            change_label = f"{change_percent:.1f}%"
+
+        featured_stocks.append({
+            "ticker": stock["ticker"],
+            "name": stock["name"],
+            "change_label": change_label,
+            "sparkline_points": build_sparkline_points(closes),
+            "trend_class": trend_class,
+        })
+
+    return featured_stocks
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     error = request.args.get("error")
+    featured_stocks = get_featured_stocks()
     if request.method == "POST":
-        ticker = request.form.get("ticker")
-        ticker = ticker.upper().strip()
+        ticker = (request.form.get("ticker") or "").upper().strip()
 
         if not ticker:
-            return render_template("index.html", error="No ticker provided")
+            return render_template("index.html", error="No ticker provided", featured_stocks=featured_stocks)
         if not is_valid_ticker_format(ticker):
-            return render_template("index.html", error="Invalid ticker format")
+            return render_template("index.html", error="Invalid ticker format", featured_stocks=featured_stocks)
 
         return redirect(url_for("stock", ticker=ticker))
 
-    return render_template("index.html", error=error)
+    return render_template("index.html", error=error, featured_stocks=featured_stocks)
 
 
 @app.route("/stock/<ticker>")

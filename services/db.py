@@ -72,6 +72,26 @@ def get_stock_data(ticker, interval="1d", years=5):
     conn.close()
     return data
 
+def get_recent_stock_prices(ticker, interval="1d", limit=7):
+    conn = get_connection()
+    ticker = ticker.upper()
+
+    query = """
+        SELECT date, close
+        FROM stock_prices
+        WHERE ticker = ? AND interval = ?
+        ORDER BY date DESC
+        LIMIT ?
+    """
+
+    data = pd.read_sql_query(query, conn, params=(ticker, interval, limit))
+    conn.close()
+
+    if data.empty:
+        return data
+
+    return data.sort_values("date").reset_index(drop=True)
+
 def get_company_name_from_db(ticker):
     conn = get_connection()
     cur = conn.cursor()

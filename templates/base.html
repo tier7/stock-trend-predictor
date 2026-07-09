@@ -5,7 +5,7 @@
     <title>Analiza cen akcji</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
     <header>
         <h1>Analiza kierunku zmian cen akcji</h1>
     </header>

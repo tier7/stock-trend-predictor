@@ -50,7 +50,7 @@ def fetch_company_name(ticker):
         info = stock.info
         return (info.get("longName") or info.get("shortName") or ticker)
 
-    except Exception:
+    except Exception as error:
         print(f"Could not fetch company name for {ticker}: {error}")
         return None
 
