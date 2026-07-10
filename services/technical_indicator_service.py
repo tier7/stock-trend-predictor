@@ -115,3 +115,34 @@ def calc_ichimoku_cloud(data, conversion_period=9, base_period=26, span_b_period
 
     return tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span
 
+def calc_daily_return(data):
+    data = data.copy()
+    previous_close = data["close"].shift(1)
+    dr = (data["close"] - previous_close) / previous_close
+    return dr
+
+def calc_volatility(data, period):
+    data = data.copy()
+    dr = calc_daily_return(data)
+    volatility = dr.rolling(window=period).std()
+    return volatility
+
+def calc_momentum(data, period):
+    data = data.copy()
+    previous_close = data["close"].shift(period)
+    momentum = data["close"] / previous_close - 1
+    return momentum
+
+def calc_atr(data, period):
+    data = data.copy()
+    previous_close = data["close"].shift(1)
+
+    tr1 = data["high"] - data["low"]
+    tr2 = (data["high"] - previous_close).abs()
+    tr3 = (data["low"] - previous_close).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = true_range.rolling(window=period).mean()
+
+    return atr
+
