@@ -143,6 +143,46 @@ def calc_atr(data, period):
 
     true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = true_range.rolling(window=period).mean()
-
     return atr
+
+def calculate_all_indicators(data):
+    result = data.copy()
+
+    result["sma_12"] = calc_sma(data, 12)
+    result["sma_26"] = calc_sma(data, 26)
+    result["ema_12"] = calc_ema(data, 12)
+    result["ema_26"] = calc_ema(data, 26)
+
+    macd, signal, histogram = calc_macd(data)
+    result["macd"] = macd
+    result["macd_signal"] = signal
+    result["macd_histogram"] = histogram
+
+    result["rsi_14"] = calc_rsi(data, 14)
+    result["adx_14"] = calc_adx(data, 14)
+    result["atr_14"] = calc_atr(data, 14)
+    result["daily_return"] = calc_daily_return(data)
+    result["volatility_20"] = calc_volatility(data, 20)
+    result["momentum_10"] = calc_momentum(data, 10)
+
+    return result
+
+def get_latest_indicators(data):
+    indicators = calculate_all_indicators(data)
+    latest = indicators.dropna().iloc[-1]
+
+    return {
+        "sma_12": round(latest["sma_12"], 2),
+        "sma_26": round(latest["sma_26"], 2),
+        "ema_12": round(latest["ema_12"], 2),
+        "ema_26": round(latest["ema_26"], 2),
+        "rsi_14": round(latest["rsi_14"], 2),
+        "macd": round(latest["macd"], 2),
+        "macd_signal": round(latest["macd_signal"], 2),
+        "adx_14": round(latest["adx_14"], 2),
+        "atr_14": round(latest["atr_14"], 2),
+        "daily_return": round(latest["daily_return"] * 100, 2),
+        "volatility_20": round(latest["volatility_20"] * 100, 2),
+        "momentum_10": round(latest["momentum_10"] * 100, 2),
+    }
 

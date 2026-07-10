@@ -3,32 +3,97 @@
 {% block content %}
 <h2>{{ data.ticker }} - {{ data.name }}</h2>
 
-<div class="card">
-    <p>Ostatnia cena: {{ data.last_price }}</p>
-    <p>Wolumen: {{ data.volume }}</p>
-    <p>Data: {{ data.last_date }}</p>
-    <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
-    <p>Predykcja modelu: {{data.prediction}}</p>
-</div>
-<div class="chart-card">
-    <div class="chart-topbar">
-        <div>
-            <strong>{{ data.ticker }}</strong>
-            <span>{{ data.name }}</span>
-            <span id="chart-range-label">Widok: 1Y</span>
-            <span id="chart-candle-label">Świece: 1D</span>
-        </div>
+<div class="stock-layout">
+    <div class="stock-chart-panel">
+        <div class="chart-card">
+            <div class="chart-topbar">
+                <div>
+                    <strong>{{ data.ticker }}</strong>
+                    <span>{{ data.name }}</span>
+                    <span id="chart-range-label">Widok: 1Y</span>
+                    <span id="chart-candle-label">Świece: 1D</span>
+                </div>
 
-        <div class="range-buttons">
-            <button data-range="1M">1M</button>
-            <button data-range="6M">6M</button>
-            <button data-range="1Y">1Y</button>
-            <button data-range="5Y">5Y</button>
-            <button data-range="ALL">ALL</button>
+                <div class="range-buttons">
+                    <button data-range="1M">1M</button>
+                    <button data-range="6M">6M</button>
+                    <button data-range="1Y">1Y</button>
+                    <button data-range="5Y">5Y</button>
+                    <button data-range="ALL">ALL</button>
+                </div>
+            </div>
+
+            <div id="stock-chart" data-ticker="{{ data.ticker }}"></div>
         </div>
     </div>
 
-    <div id="stock-chart" data-ticker="{{ data.ticker }}"></div>
+    <aside class="stock-sidebar">
+        <div class="card">
+            <p>Ostatnia cena: {{ data.last_price }}</p>
+            <p>Wolumen: {{ data.volume }}</p>
+            <p>Data: {{ data.last_date }}</p>
+            <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
+            <p>Predykcja modelu: {{data.prediction}}</p>
+        </div>
+
+        <div class="indicators-card">
+            <div class="section-heading">
+                <h3>Technical indicators</h3>
+                <span>Latest values</span>
+            </div>
+
+            <div class="indicator-grid">
+                <div class="indicator-item">
+                    <span>SMA 12</span>
+                    <strong>{{ indicators.sma_12 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>SMA 26</span>
+                    <strong>{{ indicators.sma_26 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>EMA 12</span>
+                    <strong>{{ indicators.ema_12 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>EMA 26</span>
+                    <strong>{{ indicators.ema_26 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>RSI 14</span>
+                    <strong>{{ indicators.rsi_14 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>MACD</span>
+                    <strong>{{ indicators.macd }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>MACD Signal</span>
+                    <strong>{{ indicators.macd_signal }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>ADX 14</span>
+                    <strong>{{ indicators.adx_14 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>ATR 14</span>
+                    <strong>{{ indicators.atr_14 }}</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>Daily Return</span>
+                    <strong>{{ indicators.daily_return }}%</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>Volatility 20</span>
+                    <strong>{{ indicators.volatility_20 }}%</strong>
+                </div>
+                <div class="indicator-item">
+                    <span>Momentum 10</span>
+                    <strong>{{ indicators.momentum_10 }}%</strong>
+                </div>
+            </div>
+        </div>
+    </aside>
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>

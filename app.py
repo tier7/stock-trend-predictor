@@ -4,6 +4,7 @@ from services.db import get_stock_data, get_latest_stock_summary, get_recent_sto
 from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
+from services.technical_indicator_service import get_latest_indicators, calculate_all_indicators
 import re
 
 
@@ -123,8 +124,11 @@ def stock(ticker):
         "price_change_percent": round(summary["price_change_percent"], 2) if summary["price_change_percent"] is not None else "-",
         "prediction": "-"
     }
+    stock_indicators = get_latest_indicators(get_stock_data(ticker, "1d", None))
+    for indicator in stock_indicators:
+        stock_indicators[indicator] = round(stock_indicators[indicator], 2)
     #chart_html = create_candlestick_chart(df, ticker)
-    return render_template("stock.html", data=stock_info)
+    return render_template("stock.html", data=stock_info, indicators=stock_indicators)
 
 @app.route("/api/stock/<ticker>/candles")
 def stock_candles_api(ticker):
