@@ -70,10 +70,65 @@ if (chartElement) {
         ? chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions)
         : chart.addCandlestickSeries(candleOptions);
 
-        const tooltip = document.createElement("div");
+    const tooltip = document.createElement("div");
     tooltip.className = "chart-tooltip";
     chartElement.appendChild(tooltip);
 
+    let currentInterval = "1d";
+    const indicatorsCache = {};
+    const indicatorSeries = {};
+    const indicatorDefinitions = {
+        sma_12: ["sma_12"],
+        sma_26: ["sma_26"],
+        ema_12: ["ema_12"],
+        ema_26: ["ema_26"],
+        bollinger_bands: ["bollinger_upper", "bollinger_mid", "bollinger_lower"]
+    };
+    const indicatorStyles = {
+        sma_12: {
+            color: "#f0b90b",
+            lineWidth: 2
+        },
+        sma_26: {
+            color: "#f6465d",
+            lineWidth: 2
+        },
+        ema_12: {
+            color: "#0ecb81",
+            lineWidth: 2
+        },
+        ema_26: {
+            color: "#3f8cff",
+            lineWidth: 2
+        },
+        bollinger_upper: {
+            color: "#b7c0cc",
+            lineWidth: 1
+        },
+        bollinger_mid: {
+            color: "#f0b90b",
+            lineWidth: 1
+        },
+        bollinger_lower: {
+            color: "#b7c0cc",
+            lineWidth: 1
+        }
+    };
+
+    function createLineSeries(options) {
+        return chart.addSeries
+            ? chart.addSeries(LightweightCharts.LineSeries, options)
+            : chart.addLineSeries(options);
+    }
+
+    function removeLineSeries(series) {
+        if (chart.removeSeries) {
+            chart.removeSeries(series);
+            return;
+        }
+
+        series.setData([]);
+    }
     function formatPrice(value) {
         if (value === undefined || value === null) {
             return "-";
@@ -212,32 +267,119 @@ if (chartElement) {
 
     function loadCandles(range) {
         const config = rangeConfig[range];
-        updateChartLabels(range, config.interval);
 
         if (!config) {
             return;
         }
 
-    fetch(`/api/stock/${ticker}/candles?interval=${config.interval}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error("Nie udało się pobrać danych dla tego tickera");
+        currentInterval = config.interval;
+        updateChartLabels(range, config.interval);
+
+        fetch(`/api/stock/${ticker}/candles?interval=${config.interval}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Nie udało się pobrać danych dla tego tickera");
+                }
+
+                return response.json();
+            })
+            .then(data => {
+                candleSeries.setData(data);
+
+                if (range === "ALL") {
+                    chart.timeScale().fitContent();
+                } else {
+                    setVisibleDays(data, config.days);
+                }
+
+                refreshActiveIndicators();
+            })
+            .catch(error => {
+                console.error("Chart data loading error:", error);
+                chartElement.innerHTML = "<p style='color: white;'>Nie znaleziono danych dla tego tickera.</p>";
+            });
+    }
+
+    function loadIndicators(interval) {
+        if (indicatorsCache[interval]) {
+            return Promise.resolve(indicatorsCache[interval]);
+        }
+
+        return fetch(`/api/stock/${ticker}/indicators?interval=${interval}`, {
+            cache: "no-store"
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Nie udało się pobrać wskaźników");
+                }
+
+                return response.json();
+            })
+            .then(data => {
+                indicatorsCache[interval] = data;
+                return indicatorsCache[interval];
+            })
+            .catch(error => {
+                console.error("Indicators loading error:", error);
+                return null;
+            });
+    }
+
+    function toggleIndicator(indicatorName, button) {
+        if (indicatorSeries[indicatorName]) {
+            indicatorSeries[indicatorName].forEach(item => {
+                removeLineSeries(item.series);
+            });
+
+            delete indicatorSeries[indicatorName];
+            button.classList.remove("active");
+            return;
+        }
+
+        button.classList.add("loading");
+
+        loadIndicators(currentInterval).then(data => {
+            const seriesNames = indicatorDefinitions[indicatorName] || [indicatorName];
+
+            if (!data || seriesNames.some(seriesName => !data[seriesName])) {
+                return;
             }
 
-            return response.json();
-        })
-        .then(data => {
-            candleSeries.setData(data);
+            indicatorSeries[indicatorName] = seriesNames.map(seriesName => {
+                const lineSeries = createLineSeries(indicatorStyles[seriesName] || {});
+                lineSeries.setData(data[seriesName]);
 
-            if (range === "ALL") {
-                chart.timeScale().fitContent();
-            } else {
-                setVisibleDays(data, config.days);
+                return {
+                    name: seriesName,
+                    series: lineSeries
+                };
+            });
+
+            button.classList.add("active");
+        }).finally(() => {
+            button.classList.remove("loading");
+        });
+    }
+
+    function refreshActiveIndicators() {
+        const activeIndicatorNames = Object.keys(indicatorSeries);
+
+        if (activeIndicatorNames.length === 0) {
+            return;
+        }
+
+        loadIndicators(currentInterval).then(data => {
+            if (!data) {
+                return;
             }
-        })
-        .catch(error => {
-            console.error("Chart data loading error:", error);
-            chartElement.innerHTML = "<p style='color: white;'>Nie znaleziono danych dla tego tickera.</p>";
+
+            activeIndicatorNames.forEach(indicatorName => {
+                indicatorSeries[indicatorName].forEach(item => {
+                    if (data[item.name]) {
+                        item.series.setData(data[item.name]);
+                    }
+                });
+            });
         });
     }
 
@@ -251,6 +393,15 @@ if (chartElement) {
             button.classList.add("active");
 
             loadCandles(range);
+        });
+    });
+
+    const indicatorButtons = document.querySelectorAll(".indicator-tabs button[data-indicator]");
+
+    indicatorButtons.forEach(button => {
+        button.addEventListener("click", event => {
+            event.preventDefault();
+            toggleIndicator(button.dataset.indicator, button);
         });
     });
 

@@ -23,6 +23,14 @@
                 </div>
             </div>
 
+            <div class="indicator-tabs">
+                <button type="button" data-indicator="sma_12">SMA 12</button>
+                <button type="button" data-indicator="sma_26">SMA 26</button>
+                <button type="button" data-indicator="ema_12">EMA 12</button>
+                <button type="button" data-indicator="ema_26">EMA 26</button>
+                <button type="button" data-indicator="bollinger_bands">BOLL 20</button>
+            </div>
+
             <div id="stock-chart" data-ticker="{{ data.ticker }}"></div>
         </div>
     </div>
@@ -97,7 +105,7 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js') }}"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='indicators-7') }}"></script>
 
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

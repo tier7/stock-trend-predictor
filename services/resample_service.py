@@ -9,12 +9,15 @@ def resample_data(data,interval):
     if interval not in name_map:
         return data.copy()
 
+    data = data.copy()
     data["date"] = pd.to_datetime(data["date"])
     data=data.set_index("date")
+    data["period_date"] = data.index
 
     resampled = data.resample(name_map[interval]).agg(
         {"ticker": "last",
          "interval": "last",
+         "period_date": "last",
          "open": "first",
          "high": "max",
          "low": "min",
@@ -25,7 +28,8 @@ def resample_data(data,interval):
     )
 
     resampled = resampled.dropna(subset=["open", "high", "low", "close"])
-    resampled = resampled.reset_index()
+    resampled = resampled.reset_index(drop=True)
+    resampled = resampled.rename(columns={"period_date": "date"})
     resampled["date"] = resampled["date"].dt.strftime("%Y-%m-%d")
     resampled["interval"] = interval
 

@@ -155,5 +155,44 @@ def stock_candles_api(ticker):
     candles = candles_df.to_dict(orient="records")
     return jsonify(candles)
 
+@app.route("/api/stock/<ticker>/indicators")
+def stock_indicators_api(ticker):
+    ticker = ticker.upper()
+    success = ensure_stock_data(ticker, "1d")
+    if not success:
+        return jsonify({"error": f"No data found for ticker {ticker}"}), 404
+
+    df = get_stock_data(ticker, "1d", None)
+    if df.empty:
+        return jsonify({"error": f"No data found for ticker {ticker}"}), 404
+
+    interval = request.args.get("interval", "1d")
+    df = resample_data(df, interval)
+    indicators = calculate_all_indicators(df)
+
+    indicator_columns = [
+        "sma_12",
+        "sma_26",
+        "ema_12",
+        "ema_26",
+        "bollinger_mid",
+        "bollinger_upper",
+        "bollinger_lower",
+    ]
+    result = {}
+
+    for column in indicator_columns:
+        series_df = indicators[["date", column]].dropna().copy()
+        series_df = series_df.rename(columns={
+            "date": "time",
+            column: "value"
+        })
+        series_df["time"] = series_df["time"].astype(str)
+        series_df["value"] = series_df["value"].astype(float)
+
+        result[column] = series_df.to_dict(orient="records")
+
+    return jsonify(result)
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5001)

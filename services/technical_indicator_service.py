@@ -153,6 +153,11 @@ def calculate_all_indicators(data):
     result["ema_12"] = calc_ema(data, 12)
     result["ema_26"] = calc_ema(data, 26)
 
+    bollinger_mid, bollinger_upper, bollinger_lower = calc_bollinger_bands(data)
+    result["bollinger_mid"] = bollinger_mid
+    result["bollinger_upper"] = bollinger_upper
+    result["bollinger_lower"] = bollinger_lower
+
     macd, signal, histogram = calc_macd(data)
     result["macd"] = macd
     result["macd_signal"] = signal

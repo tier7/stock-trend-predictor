@@ -379,12 +379,19 @@ button {
     position: relative;
 }
 
-.range-buttons {
+.range-buttons,
+.indicator-tabs {
     display: flex;
     gap: 8px;
 }
 
-.range-buttons button {
+.indicator-tabs {
+    flex-wrap: wrap;
+    margin: 12px 0;
+}
+
+.range-buttons button,
+.indicator-tabs button {
     padding: 6px 10px;
     background: #1e2329;
     color: #eaecef;
@@ -392,8 +399,14 @@ button {
     border-radius: 6px;
 }
 
+.indicator-tabs button.loading {
+    opacity: 0.65;
+}
+
 .range-buttons button:hover,
-.range-buttons button.active {
+.range-buttons button.active,
+.indicator-tabs button:hover,
+.indicator-tabs button.active {
     background: var(--gold);
     color: #0b0e11;
 }
@@ -502,7 +515,8 @@ button {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .range-buttons {
+    .range-buttons,
+    .indicator-tabs {
         flex-wrap: wrap;
     }
 }
