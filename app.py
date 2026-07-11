@@ -1,6 +1,6 @@
 from math import isfinite
 from flask import Flask, render_template, request, redirect, url_for, jsonify
-from services.db import get_stock_data, get_latest_stock_summary, get_recent_stock_prices
+from services.db import create_tables, get_stock_data, get_latest_stock_summary, get_recent_stock_prices
 from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
@@ -195,4 +195,5 @@ def stock_indicators_api(ticker):
     return jsonify(result)
 
 if __name__ == "__main__":
+    create_tables()
     app.run(debug=True, port=5001)

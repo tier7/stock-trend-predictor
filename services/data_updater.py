@@ -12,7 +12,7 @@ def ensure_stock_data(ticker, interval="1d"):
     conn = get_connection()
     cur = conn.cursor()
     ticker = ticker.upper()
-    cur.execute("SELECT date FROM stock_prices WHERE ticker = ? AND interval = ? ORDER BY date DESC LIMIT 1", (ticker,interval))
+    cur.execute("SELECT date FROM stock_prices WHERE ticker = %s AND interval = %s ORDER BY date DESC LIMIT 1", (ticker,interval))
     row = cur.fetchone()
     conn.close()
 

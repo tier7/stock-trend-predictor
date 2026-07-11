@@ -1,13 +1,16 @@
-import sqlite3
-import services.data_fetcher
 import pandas as pd
-from pathlib import Path
+from dotenv import load_dotenv
+import os
+import psycopg
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_NAME = BASE_DIR / "stocks.db"
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
-    conn = sqlite3.connect(DB_NAME)
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+
+    conn = psycopg.connect(DATABASE_URL)
     return conn
 
 def create_tables():
@@ -21,7 +24,7 @@ def create_tables():
     high REAL NOT NULL,
     low REAL NOT NULL,
     close REAL NOT NULL,
-    volume INTEGER NOT NULL,
+    volume BIGINT NOT NULL,
     dividends REAL default 0,
     stock_splits REAL default 0,
         
@@ -52,7 +55,17 @@ def save_stock_data(data):
         "dividends",
         "stock_splits"
     ]].values.tolist()
-    cur.executemany("""INSERT OR REPLACE INTO stock_prices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
+    cur.executemany("""INSERT INTO stock_prices (ticker, interval, date, open, high, low, close, volume, dividends, stock_splits)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ticker, interval, date) DO UPDATE SET
+            open = EXCLUDED.open,
+            high = EXCLUDED.high,
+            low = EXCLUDED.low,
+            close = EXCLUDED.close,
+            volume = EXCLUDED.volume,
+            dividends = EXCLUDED.dividends,
+            stock_splits = EXCLUDED.stock_splits
+    """, rows)
 
     conn.commit()
     conn.close()
@@ -62,12 +75,13 @@ def get_stock_data(ticker, interval="1d", years=5):
     ticker = ticker.upper()
 
     if years is None:
-        query = "SELECT * FROM stock_prices WHERE ticker = ? AND interval = ? ORDER BY date ASC"
+        query = "SELECT * FROM stock_prices WHERE ticker = %s AND interval = %s ORDER BY date ASC"
         data = pd.read_sql_query(query, conn, params=(ticker, interval))
 
     else:
-        query = "SELECT * FROM stock_prices WHERE ticker = ? AND interval = ? AND date >= date('now', ?) ORDER BY date ASC"
-        data = pd.read_sql_query(query, conn, params=(ticker, interval, f"-{years} years"))
+        query = """SELECT * FROM stock_prices WHERE ticker = %s AND interval = %s
+              AND date >= to_char(CURRENT_DATE - (%s * INTERVAL '1 year'), 'YYYY-MM-DD') ORDER BY date ASC"""
+        data = pd.read_sql_query(query, conn, params=(ticker, interval, years))
 
     conn.close()
     return data
@@ -79,9 +93,9 @@ def get_recent_stock_prices(ticker, interval="1d", limit=7):
     query = """
         SELECT date, close
         FROM stock_prices
-        WHERE ticker = ? AND interval = ?
+        WHERE ticker = %s AND interval = %s
         ORDER BY date DESC
-        LIMIT ?
+        LIMIT %s
     """
 
     data = pd.read_sql_query(query, conn, params=(ticker, interval, limit))
@@ -97,7 +111,7 @@ def get_company_name_from_db(ticker):
     cur = conn.cursor()
 
     ticker = ticker.upper()
-    cur.execute("SELECT name from companies WHERE ticker = ?", (ticker,))
+    cur.execute("SELECT name from companies WHERE ticker = %s", (ticker,))
     row = cur.fetchone()
     conn.close()
 
@@ -111,7 +125,7 @@ def save_company_data(ticker, name):
     cur = conn.cursor()
     ticker = ticker.upper()
 
-    cur.execute("INSERT INTO companies VALUES (?, ?)", (ticker, name))
+    cur.execute("INSERT INTO companies VALUES (%s, %s)", (ticker, name))
 
     conn.commit()
     conn.close()
@@ -125,7 +139,7 @@ def get_latest_stock_summary(ticker, interval="1d"):
     query = """
         SELECT date, close, volume
         FROM stock_prices
-        WHERE ticker = ? AND interval = ?
+        WHERE ticker = %s AND interval = %s
         ORDER BY date DESC
         LIMIT 2
     """
