@@ -1,4 +1,12 @@
 services:
+  app:
+    build: .
+    ports:
+      - "5001:5001"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/stocks
+    depends_on:
+      - db
   db:
     image: postgres:18
     container_name: stock-trend-postgres
