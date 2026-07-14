@@ -42,6 +42,9 @@
             <p>Data: {{ data.last_date }}</p>
             <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
             <p>Predykcja modelu: {{data.prediction}}</p>
+            <label for="start">Start date:</label>
+            <input type="date" id="start" />
+            <button type="button" data-indicator="start_prediction">Uruchom model</button>
         </div>
 
         <div class="indicators-card">

@@ -5,7 +5,9 @@ from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
 from services.technical_indicator_service import get_latest_indicators, calculate_all_indicators
+from services.ml.model_service import train_and_predict
 import re
+
 
 
 app = Flask(__name__)
@@ -193,6 +195,31 @@ def stock_indicators_api(ticker):
         result[column] = series_df.to_dict(orient="records")
 
     return jsonify(result)
+
+@app.route("/api/stock/<ticker>/prediction")
+def stock_prediction_api(ticker):
+    ticker = ticker.upper()
+    start_date = request.args.get("start_date")
+
+    if not start_date:
+        return jsonify({"error": "Missing start date"}), 400
+
+    success = ensure_stock_data(ticker, "1d")
+    if not success:
+        return jsonify({"error": f"No data found for ticker {ticker}"}), 404
+
+    df = get_stock_data(ticker, "1d", None)
+    if df.empty:
+        return jsonify({"error": f"No data found for ticker {ticker}"}), 404
+
+    try:
+        predictions = train_and_predict(df, start_date)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify(predictions)
+
+
 
 if __name__ == "__main__":
     create_tables()
