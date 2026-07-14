@@ -23,8 +23,8 @@ def resample_data(data,interval):
          "low": "min",
          "close": "last",
          "volume": "sum",
-         "dividend": "sum",
-        "stock_splits": "sum"}
+         "dividends": "sum",
+         "stock_splits": "sum"}
     )
 
     resampled = resampled.dropna(subset=["open", "high", "low", "close"])
