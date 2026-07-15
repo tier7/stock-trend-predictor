@@ -73,6 +73,7 @@ if (chartElement) {
     const tooltip = document.createElement("div");
     tooltip.className = "chart-tooltip";
     chartElement.appendChild(tooltip);
+    const chartLegend = document.getElementById("chart-legend");
 
     let currentInterval = "1d";
     const indicatorsCache = {};
@@ -114,6 +115,39 @@ if (chartElement) {
             lineWidth: 1
         }
     };
+    const indicatorLegendLabels = {
+        sma_12: "Średnia krocząca z 12 sesji",
+        sma_26: "Średnia krocząca z 26 sesji",
+        ema_12: "Wykładnicza średnia krocząca z 12 sesji",
+        ema_26: "Wykładnicza średnia krocząca z 26 sesji",
+        bollinger_upper: "Bollinger górne pasmo",
+        bollinger_mid: "Bollinger średnia z 20 sesji",
+        bollinger_lower: "Bollinger dolne pasmo"
+    };
+
+    function updateIndicatorLegend() {
+        if (!chartLegend) {
+            return;
+        }
+
+        chartLegend.replaceChildren();
+
+        Object.values(indicatorSeries).flat().forEach(item => {
+            const style = indicatorStyles[item.name] || {};
+            const legendItem = document.createElement("span");
+            const legendLine = document.createElement("span");
+            const legendLabel = document.createElement("span");
+
+            legendItem.className = "chart-legend-item";
+            legendLine.className = "chart-legend-line";
+            legendLine.style.borderTopColor = style.color || "#b7c0cc";
+            legendLine.style.borderTopWidth = `${style.lineWidth || 2}px`;
+            legendLabel.textContent = indicatorLegendLabels[item.name] || item.name;
+
+            legendItem.append(legendLine, legendLabel);
+            chartLegend.appendChild(legendItem);
+        });
+    }
 
     function createLineSeries(options) {
         return chart.addSeries
@@ -332,6 +366,7 @@ if (chartElement) {
             });
 
             delete indicatorSeries[indicatorName];
+            updateIndicatorLegend();
             button.classList.remove("active");
             return;
         }
@@ -355,6 +390,7 @@ if (chartElement) {
                 };
             });
 
+            updateIndicatorLegend();
             button.classList.add("active");
         }).finally(() => {
             button.classList.remove("loading");

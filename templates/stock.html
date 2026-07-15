@@ -32,6 +32,7 @@
             </div>
 
             <div id="stock-chart" data-ticker="{{ data.ticker }}"></div>
+            <div id="chart-legend" class="chart-legend" aria-label="Legenda aktywnych wskaźników"></div>
         </div>
     </div>
 
@@ -108,7 +109,7 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js', v='indicators-7') }}"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='indicators-8') }}"></script>
 
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

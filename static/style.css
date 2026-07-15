@@ -379,6 +379,35 @@ button {
     position: relative;
 }
 
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 20px;
+    margin-top: 8px;
+    padding: 12px 4px 0;
+    border-top: 1px solid #1e2329;
+    color: #b7c0cc;
+    font-size: 12px;
+}
+
+.chart-legend:empty {
+    display: none;
+}
+
+.chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chart-legend-line {
+    width: 26px;
+    height: 0;
+    flex: 0 0 auto;
+    border-top-style: solid;
+}
+
 .range-buttons,
 .indicator-tabs {
     display: flex;
