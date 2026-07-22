@@ -32,7 +32,8 @@ def prepare_dataset(data):
 
     data["next_close"] = data["close"].shift(-1)
     data["target"] = (data["next_close"] > data["close"]).astype(int)
-
-    data = data.dropna(subset=FEATURE_COLUMNS + ["next_close", "target"])
+    data["next_open"] = data["open"].shift(-1)
+    data["next_date"] = data["date"].shift(-1)
+    data = data.dropna(subset=FEATURE_COLUMNS + ["next_date", "next_open", "next_close", "target"])
 
     return data

@@ -26,6 +26,9 @@ def evaluate_ticker(ticker):
     with urlopen(url, timeout=600) as response:
         data = json.load(response)
 
+    model_summary = data["model_summary"]
+    buy_and_hold_summary = data["buyandhold_summary"]
+
     return {
         "ticker": ticker,
         "accuracy": data["accuracy"],
@@ -35,6 +38,15 @@ def evaluate_ticker(ticker):
         "f1": data["f1"],
         "correct": data["correct_predictions"],
         "total": data["total_predictions"],
+
+        "strategy_return": model_summary["total_return"],
+        "buy_hold_return": buy_and_hold_summary["total_return"],
+        "return_difference": (
+                model_summary["total_return"]
+                - buy_and_hold_summary["total_return"]
+        ),
+        "final_value": model_summary["final_value"],
+        "transactions": model_summary["total_transactions"],
     }
 
 def format_percent(value):
@@ -64,7 +76,27 @@ def print_results(results):
             f"{format_percent(result['f1']):>12}"
             f"{correct:>12}"
         )
+def print_backtest_results(results):
+    print()
+    print("Wyniki symulatora")
+    print(
+        f"{'Ticker':<8}"
+        f"{'Model':>12}"
+        f"{'Buy and hold':>12}"
+        f"{'Difference':>12}"
+        f"{'Final value':>14}"
+        f"{'Transactions':>14}"
+    )
 
+    for result in results:
+        print(
+            f"{result['ticker']:<8}"
+            f"{format_percent(result['strategy_return']):>12}"
+            f"{format_percent(result['buy_hold_return']):>12}"
+            f"{format_percent(result['return_difference']):>12}"
+            f"{result['final_value']:>14.2f}"
+            f"{result['transactions']:>14}"
+        )
 if __name__ == "__main__":
     results = []
     for ticker in TICKERS:
@@ -77,3 +109,4 @@ if __name__ == "__main__":
             print(f"Nie udało się przetestować {ticker}: {error}")
 
     print_results(results)
+    print_backtest_results(results)

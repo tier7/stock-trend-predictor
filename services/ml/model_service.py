@@ -1,6 +1,7 @@
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score,confusion_matrix,precision_score,recall_score,f1_score
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset
+from services.simulator_service import run_buy_and_hold, run_backtest
 
 
 RETRAIN_INTERVAL = 20
@@ -29,7 +30,7 @@ def train_and_predict(data,start_date):
             x_train = current_train_df[FEATURE_COLUMNS]
             y_train = current_train_df["target"]
             baseline_prediction = int(y_train.mode().iloc[0])
-            model = RandomForestClassifier(n_estimators=100, random_state=26)
+            model = RandomForestClassifier(n_estimators=100,random_state=26)
             model.fit(x_train, y_train)
         current_features = test_row[FEATURE_COLUMNS].to_frame().T.astype(float)
         baseline_predictions.append(baseline_prediction)
@@ -48,10 +49,16 @@ def train_and_predict(data,start_date):
     recall = recall_score(y_test, predictions, zero_division=0)
     f1 = f1_score(y_test, predictions, zero_division=0)
 
-    result_df = test_df[["date", "close", "target"]].copy()
+    result_df = test_df[["date", "close", "next_date", "next_open", "next_close", "target"]].copy()
     result_df["prediction"] = predictions
     result_df["probability_up"] = probabilities_up
     result_df["is_correct"] = result_df["prediction"] == result_df["target"]
+    result_df["date"] = result_df["date"].astype(str)
+    result_df["next_date"] = result_df["next_date"].astype(str)
+    prediction_records = result_df.to_dict(orient="records")
+
+    modelsim = run_backtest(prediction_records)
+    bahsim = run_buy_and_hold(prediction_records)
 
     return {
         "accuracy": float(acc),
@@ -60,7 +67,7 @@ def train_and_predict(data,start_date):
         "training_rows": int(len(train_df)),
         "total_predictions": int(len(result_df)),
         "correct_predictions": int(result_df["is_correct"].sum()),
-        "predictions": result_df.to_dict(orient="records"),
+        "predictions": prediction_records,
         "baseline_accuracy": float(baseline_acc),
         "confusion_matrix": {
             "true_negative": int(tn),
@@ -71,4 +78,7 @@ def train_and_predict(data,start_date):
         "precision": float(precision),
         "recall": float(recall),
         "f1": float(f1),
+        "model_summary": modelsim,
+        "buyandhold_summary": bahsim,
+
     }
