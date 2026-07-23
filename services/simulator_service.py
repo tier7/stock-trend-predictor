@@ -1,4 +1,16 @@
 
+def calculate_max_drawdown(equity_history, initial_cash):
+    max_wallet_value = initial_cash
+    max_drawdown = 0
+    for trade in equity_history:
+        wallet_value = float(trade["value"])
+        if wallet_value > max_wallet_value:
+            max_wallet_value = trade["value"]
+        drawdown = (max_wallet_value - wallet_value) / max_wallet_value
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+    return max_drawdown
+
 def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     if not predictions:
         raise ValueError("No predictions available for backtest.")
@@ -6,7 +18,9 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     shares = 0
     trades = []
     wallet_value = cash
+    max_wallet_value = wallet_value
     equity_history = []
+    dropdown = 0
 
     for prediction in predictions:
         signal = prediction["prediction"]
@@ -41,7 +55,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     position_open = shares > 0
     final_value = equity_history[-1]["value"]
     total_return = final_value / initial_cash - 1
-
+    max_drawdown = calculate_max_drawdown(equity_history, initial_cash)
     return {
         "initial_cash": float(initial_cash),
         "final_value": float(final_value),
@@ -50,6 +64,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         "total_transactions": len(trades),
         "trades": trades,
         "equity_history": equity_history,
+        "max_drawdown": max_drawdown,
     }
 
 def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
@@ -68,6 +83,17 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
     final_value = gross_value - sell_fee
     total_return = final_value / initial_cash - 1
 
+    equity_history = []
+    for prediction in predictions:
+        valuation_price = float(prediction["next_close"])
+        value = shares * valuation_price * (1 - fee_rate)
+
+        equity_history.append({
+            "date": prediction["next_date"],
+            "value": value,
+        })
+    max_drawdown = calculate_max_drawdown(equity_history,initial_cash,)
+
     return {
         "initial_cash": float(initial_cash),
         "final_value": float(final_value),
@@ -76,6 +102,7 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
         "final_price": final_price,
         "buy_fee": float(buy_fee),
         "sell_fee": float(sell_fee),
+        "max_drawdown": max_drawdown,
     }
 
 

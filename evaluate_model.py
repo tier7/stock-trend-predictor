@@ -40,6 +40,8 @@ def evaluate_ticker(ticker):
         "f1": data["f1"],
         "correct": data["correct_predictions"],
         "total": data["total_predictions"],
+        "model_max_drawdown": model_summary["max_drawdown"],
+        "buy_hold_max_drawdown": buy_and_hold_summary["max_drawdown"],
 
         "strategy_return": model_summary["total_return"],
         "buy_hold_return": buy_and_hold_summary["total_return"],
@@ -64,6 +66,9 @@ def print_results(results):
         f"{'Recall':>12}"
         f"{'F1':>12}"
         f"{'Correct':>12}"
+        f"{'Model DD':>12}"
+        f"{'B&H DD':>12}"
+
     )
 
     for result in results:
@@ -77,6 +82,8 @@ def print_results(results):
             f"{format_percent(result['recall']):>12}"
             f"{format_percent(result['f1']):>12}"
             f"{correct:>12}"
+            f"{format_percent(result['model_max_drawdown']):>12}"
+            f"{format_percent(result['buy_hold_max_drawdown']):>12}"
         )
 def print_backtest_results(results):
     print()
