@@ -6,6 +6,7 @@ from urllib.request import urlopen
 
 BASE_URL = "http://localhost:5001"
 START_DATE = "2025-10-01"
+END_DATE = "2026-07-22"
 
 TICKERS = [
     "AAPL",
@@ -19,6 +20,7 @@ TICKERS = [
 def evaluate_ticker(ticker):
     query = urlencode({
         "start_date": START_DATE,
+        "end_date": END_DATE,
     })
 
     url = f"{BASE_URL}/api/stock/{ticker}/prediction?{query}"

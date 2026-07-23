@@ -43,9 +43,19 @@
             <p>Data: {{ data.last_date }}</p>
             <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
             <p>Predykcja modelu: {{data.prediction}}</p>
-            <label for="start">Start date:</label>
-            <input type="date" id="start" />
-            <button type="button" data-indicator="start_prediction">Uruchom model</button>
+            <div class="prediction-date-row">
+                <label for="start">Start date:</label>
+                <input type="date" id="start" />
+            </div>
+
+            <div class="prediction-date-row">
+                <label for="end">End date:</label>
+                <input type="date" id="end" value="{{ data.last_date }}" />
+            </div>
+
+            <button type="button" data-indicator="start_prediction">
+                Uruchom model
+            </button>
         </div>
 
         <div class="indicators-card">
@@ -109,7 +119,7 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js', v='indicators-8') }}"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='prediction-end-date-1') }}"></script>
 
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

@@ -435,57 +435,69 @@ if (chartElement) {
     const indicatorButtons = document.querySelectorAll(".indicator-tabs button[data-indicator]");
 
     const predictionStartInput = document.getElementById("start");
-const predictionButton = document.querySelector('button[data-indicator="start_prediction"]');
+    const predictionEndInput = document.getElementById("end");
+    const predictionButton = document.querySelector('button[data-indicator="start_prediction"]');
 
-let predictionResultElement = document.getElementById("prediction-result");
+    let predictionResultElement = document.getElementById("prediction-result");
 
-if (!predictionResultElement && predictionButton) {
-    predictionResultElement = document.createElement("p");
-    predictionResultElement.id = "prediction-result";
-    predictionButton.insertAdjacentElement("afterend", predictionResultElement);
-}
+    if (!predictionResultElement && predictionButton) {
+        predictionResultElement = document.createElement("p");
+        predictionResultElement.id = "prediction-result";
+        predictionButton.insertAdjacentElement("afterend", predictionResultElement);
+    }
 
-if (predictionButton && predictionStartInput) {
-    predictionButton.addEventListener("click", () => {
-        const startDate = predictionStartInput.value;
+    if (predictionButton && predictionStartInput && predictionEndInput) {
+        predictionButton.addEventListener("click", () => {
+            const startDate = predictionStartInput.value;
+            const endDate = predictionEndInput.value;
 
-        if (!startDate) {
-            predictionResultElement.textContent = "Wybierz date startu predykcji.";
-            return;
-        }
+            if (!startDate || !endDate) {
+                predictionResultElement.textContent = "Wybierz datę początku i końca testu.";
+                return;
+            }
 
-        predictionButton.disabled = true;
-        predictionResultElement.textContent = "Trenowanie modelu...";
+            if (startDate >= endDate) {
+                predictionResultElement.textContent = "Data końcowa musi być późniejsza od początkowej.";
+                return;
+            }
 
-        fetch(`/api/stock/${ticker}/prediction?start_date=${encodeURIComponent(startDate)}`, {
-            cache: "no-store"
-        })
-            .then(response => {
-                return response.json().then(data => {
-                    if (!response.ok) {
-                        throw new Error(data.error || "Nie udalo sie uruchomic predykcji");
-                    }
-
-                    return data;
-                });
-            })
-            .then(data => {
-                const accuracyPercent = (data.accuracy * 100).toFixed(2);
-
-                predictionResultElement.textContent =
-                    `Skutecznosc modelu: ${accuracyPercent}% (${data.correct_predictions}/${data.total_predictions})`;
-
-                console.log("Prediction result:", data);
-            })
-            .catch(error => {
-                console.error("Prediction error:", error);
-                predictionResultElement.textContent = error.message;
-            })
-            .finally(() => {
-                predictionButton.disabled = false;
+            const query = new URLSearchParams({
+                start_date: startDate,
+                end_date: endDate
             });
-    });
-}
+
+            predictionButton.disabled = true;
+            predictionResultElement.textContent = "Trenowanie modelu...";
+
+            fetch(`/api/stock/${ticker}/prediction?${query}`, {
+                cache: "no-store"
+            })
+                .then(response => {
+                    return response.json().then(data => {
+                        if (!response.ok) {
+                            throw new Error(data.error || "Nie udalo sie uruchomic predykcji");
+                        }
+
+                        return data;
+                    });
+                })
+                .then(data => {
+                    const accuracyPercent = (data.accuracy * 100).toFixed(2);
+
+                    predictionResultElement.textContent =
+                        `Skutecznosc modelu: ${accuracyPercent}% (${data.correct_predictions}/${data.total_predictions})`;
+
+                    console.log("Prediction result:", data);
+                })
+                .catch(error => {
+                    console.error("Prediction error:", error);
+                    predictionResultElement.textContent = error.message;
+                })
+                .finally(() => {
+                    predictionButton.disabled = false;
+                });
+        });
+    }
 
     indicatorButtons.forEach(button => {
         button.addEventListener("click", event => {

@@ -6,14 +6,20 @@ from services.simulator_service import run_buy_and_hold, run_backtest
 
 RETRAIN_INTERVAL = 20
 
-def split_dataset_by_date(data, start_date):
+def split_dataset_by_date(data, start_date, end_date):
     train_df = data[data["date"] < start_date]
-    test_df =  data[data["date"] >= start_date]
+    test_df = data[
+        (data["date"] >= start_date)
+        & (data["next_date"] <= end_date)
+    ]
     return train_df, test_df
 
-def train_and_predict(data,start_date):
+def train_and_predict(data, start_date, end_date):
+    if start_date >= end_date:
+        raise ValueError("End date must be later than start date.")
+
     df = prepare_dataset(data)
-    train_df, test_df = split_dataset_by_date(df, start_date)
+    train_df, test_df = split_dataset_by_date(df, start_date, end_date)
     if len(train_df) < 100:
         raise ValueError("Not enough training data before selected date. Choose a later date.")
 
@@ -63,7 +69,9 @@ def train_and_predict(data,start_date):
     return {
         "accuracy": float(acc),
         "requested_start_date": start_date,
+        "requested_end_date": end_date,
         "effective_test_start_date": str(result_df["date"].iloc[0]),
+        "effective_test_end_date": str(result_df["next_date"].iloc[-1]),
         "training_rows": int(len(train_df)),
         "total_predictions": int(len(result_df)),
         "correct_predictions": int(result_df["is_correct"].sum()),

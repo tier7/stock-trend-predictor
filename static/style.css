@@ -270,6 +270,18 @@ button {
     max-width: none;
 }
 
+.prediction-date-row {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.prediction-date-row input {
+    width: 100%;
+}
+
 .stock-overview {
     display: grid;
     grid-template-columns: minmax(260px, 500px) minmax(420px, 1fr);

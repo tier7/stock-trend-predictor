@@ -200,9 +200,10 @@ def stock_indicators_api(ticker):
 def stock_prediction_api(ticker):
     ticker = ticker.upper()
     start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
 
-    if not start_date:
-        return jsonify({"error": "Missing start date"}), 400
+    if not start_date or not end_date:
+        return jsonify({"error": "Missing start or end date"}), 400
 
     success = ensure_stock_data(ticker, "1d")
     if not success:
@@ -213,7 +214,7 @@ def stock_prediction_api(ticker):
         return jsonify({"error": f"No data found for ticker {ticker}"}), 404
 
     try:
-        predictions = train_and_predict(df, start_date)
+        predictions = train_and_predict(df, start_date, end_date)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
