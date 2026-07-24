@@ -1,3 +1,5 @@
+from datetime import date
+
 
 def calculate_max_drawdown(equity_history, initial_cash):
     max_wallet_value = initial_cash
@@ -11,6 +13,20 @@ def calculate_max_drawdown(equity_history, initial_cash):
             max_drawdown = drawdown
     return max_drawdown
 
+def calculate_cagr(equity_history, initial_value, final_value):
+    start_date = date.fromisoformat(equity_history[0]["date"])
+    end_date = date.fromisoformat(equity_history[-1]["date"])
+    days = (end_date - start_date).days
+
+    if days <= 0:
+        raise ValueError("CAGR requires at least two different dates.")
+
+    years = days / 365.25
+    cagr = (final_value / initial_value) ** (1 / years) - 1
+    return float(cagr)
+
+
+
 def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     if not predictions:
         raise ValueError("No predictions available for backtest.")
@@ -22,6 +38,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     equity_history = []
     dropdown = 0
     days_in_market = 0
+    cagr = 0
 
     for prediction in predictions:
         signal = prediction["prediction"]
@@ -59,6 +76,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     total_return = final_value / initial_cash - 1
     max_drawdown = calculate_max_drawdown(equity_history, initial_cash)
     market_exposure = days_in_market/len(predictions)
+    cagr = calculate_cagr(equity_history, initial_cash, final_value)
 
     return {
         "initial_cash": float(initial_cash),
@@ -70,6 +88,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         "equity_history": equity_history,
         "max_drawdown": max_drawdown,
         "market_exposure": market_exposure,
+        "cagr": cagr,
     }
 
 def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
@@ -98,7 +117,7 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
             "value": value,
         })
     max_drawdown = calculate_max_drawdown(equity_history,initial_cash,)
-
+    cagr = calculate_cagr(equity_history, initial_cash, final_value)
     return {
         "initial_cash": float(initial_cash),
         "final_value": float(final_value),
@@ -108,6 +127,7 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
         "buy_fee": float(buy_fee),
         "sell_fee": float(sell_fee),
         "max_drawdown": max_drawdown,
+        "cagr": cagr,
     }
 
 

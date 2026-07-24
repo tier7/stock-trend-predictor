@@ -51,6 +51,8 @@ def evaluate_ticker(ticker):
         ),
         "final_value": model_summary["final_value"],
         "transactions": model_summary["total_transactions"],
+        "model_cagr": model_summary["cagr"],
+        "buy_hold_cagr": buy_and_hold_summary["cagr"],
     }
 
 def format_percent(value):
@@ -69,6 +71,8 @@ def print_results(results):
         f"{'Model DD':>12}"
         f"{'B&H DD':>12}"
         f"{'Exposure':>12}"
+        f"{'Model CAGR':>14}"
+        f"{'B&H CAGR':>14}"
     )
 
     for result in results:
@@ -85,13 +89,15 @@ def print_results(results):
             f"{format_percent(result['model_max_drawdown']):>12}"
             f"{format_percent(result['buy_hold_max_drawdown']):>12}"
             f"{format_percent(result['model_market_exposure']):>12}"
+            f"{format_percent(result['model_cagr']):>14}"
+            f"{format_percent(result['buy_hold_cagr']):>14}"
         )
 def print_backtest_results(results):
     print()
     print("Wyniki symulatora")
     print(
         f"{'Ticker':<8}"
-        f"{'Model':>12}"
+        f"{'Model':>12} "
         f"{'Buy and hold':>12}"
         f"{'Difference':>12}"
         f"{'Final value':>14}"
