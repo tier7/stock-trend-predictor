@@ -438,6 +438,130 @@ if (chartElement) {
     const predictionEndInput = document.getElementById("end");
     const predictionButton = document.querySelector('button[data-indicator="start_prediction"]');
 
+    const backtestResultsElement = document.getElementById("backtest-results");
+    const modelReturnElement = document.getElementById("model-return");
+    const buyHoldReturnElement = document.getElementById("buy-hold-return");
+    const modelCagrElement = document.getElementById("model-cagr");
+    const buyHoldCagrElement = document.getElementById("buy-hold-cagr");
+    const modelDrawdownElement = document.getElementById("model-drawdown");
+    const buyHoldDrawdownElement = document.getElementById("buy-hold-drawdown");
+    const modelExposureElement = document.getElementById("model-exposure");
+    const modelFinalValueElement = document.getElementById("model-final-value");
+    const buyHoldFinalValueElement = document.getElementById("buy-hold-final-value");
+    const modelTransactionsElement = document.getElementById("model-transactions");
+    const portfolioChartCard = document.getElementById("portfolio-chart-card");
+    const portfolioChartElement =document.getElementById("portfolio-chart");
+    let portfolioChart = null;
+
+    function formatPercent(value) {
+        return `${(Number(value) * 100).toFixed(2)}%`;
+    }
+    function formatMoney(value) {
+        return Number(value).toFixed(2);
+    }
+
+    function renderPortfolioChart(modelHistory, buyHoldHistory) {
+    if (
+        !portfolioChartCard ||
+        !portfolioChartElement ||
+        !modelHistory ||
+        !buyHoldHistory
+    ) {
+        return;
+    }
+
+    portfolioChartCard.hidden = false;
+
+    if (portfolioChart) {
+        portfolioChart.remove();
+        portfolioChart = null;
+    }
+
+    portfolioChartElement.replaceChildren();
+
+    portfolioChart = LightweightCharts.createChart(
+        portfolioChartElement,
+        {
+            width: portfolioChartElement.clientWidth,
+            height: 360,
+
+            layout: {
+                background: {
+                    type: "solid",
+                    color: "#0b111a"
+                },
+                textColor: "#d1d4dc"
+            },
+
+            grid: {
+                vertLines: {
+                    color: "#1e2735"
+                },
+                horzLines: {
+                    color: "#1e2735"
+                }
+            },
+
+            rightPriceScale: {
+                borderColor: "#263141"
+            },
+
+            timeScale: {
+                borderColor: "#263141"
+            },
+
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal
+            },
+
+            localization: {
+                priceFormatter: value => Number(value).toFixed(2)
+            }
+        }
+    );
+
+        const modelSeriesOptions = {
+            color: "#0ecb81",
+            lineWidth: 2,
+            priceLineVisible: false
+        };
+
+        const buyHoldSeriesOptions = {
+            color: "#f0b90b",
+            lineWidth: 2,
+            priceLineVisible: false
+        };
+
+        const modelSeries = portfolioChart.addSeries
+            ? portfolioChart.addSeries(
+                LightweightCharts.LineSeries,
+                modelSeriesOptions
+            )
+            : portfolioChart.addLineSeries(modelSeriesOptions);
+
+        const buyHoldSeries = portfolioChart.addSeries
+            ? portfolioChart.addSeries(
+                LightweightCharts.LineSeries,
+                buyHoldSeriesOptions
+            )
+            : portfolioChart.addLineSeries(buyHoldSeriesOptions);
+
+    const modelData = modelHistory.map(point => ({
+        time: point.date,
+        value: Number(point.value)
+    }));
+
+    const buyHoldData = buyHoldHistory.map(point => ({
+        time: point.date,
+        value: Number(point.value)
+    }));
+
+    modelSeries.setData(modelData);
+    buyHoldSeries.setData(buyHoldData);
+
+    portfolioChart.timeScale().fitContent();
+}
+
     let predictionResultElement = document.getElementById("prediction-result");
 
     if (!predictionResultElement && predictionButton) {
@@ -467,6 +591,8 @@ if (chartElement) {
             });
 
             predictionButton.disabled = true;
+            backtestResultsElement.hidden = true;
+            portfolioChartCard.hidden = true;
             predictionResultElement.textContent = "Trenowanie modelu...";
 
             fetch(`/api/stock/${ticker}/prediction?${query}`, {
@@ -488,6 +614,20 @@ if (chartElement) {
                         `Skutecznosc modelu: ${accuracyPercent}% (${data.correct_predictions}/${data.total_predictions})`;
 
                     console.log("Prediction result:", data);
+                    const modelSummary = data.model_summary;
+                    const buyHoldSummary = data.buyandhold_summary;
+                    modelReturnElement.textContent = formatPercent(modelSummary.total_return);
+                    buyHoldReturnElement.textContent = formatPercent(buyHoldSummary.total_return);
+                    modelCagrElement.textContent = formatPercent(modelSummary.cagr);
+                    buyHoldCagrElement.textContent = formatPercent(buyHoldSummary.cagr);
+                    modelDrawdownElement.textContent = formatPercent(modelSummary.max_drawdown);
+                    buyHoldDrawdownElement.textContent = formatPercent(buyHoldSummary.max_drawdown);
+                    modelExposureElement.textContent = formatPercent(modelSummary.market_exposure);
+                    modelFinalValueElement.textContent = formatMoney(modelSummary.final_value);
+                    buyHoldFinalValueElement.textContent = formatMoney(buyHoldSummary.final_value);
+                    modelTransactionsElement.textContent = modelSummary.total_transactions;
+                    backtestResultsElement.hidden = false;
+                    renderPortfolioChart(modelSummary.equity_history,buyHoldSummary.equity_history);
                 })
                 .catch(error => {
                     console.error("Prediction error:", error);
@@ -519,5 +659,11 @@ if (chartElement) {
         chart.applyOptions({
             width: chartElement.clientWidth
         });
+
+        if (portfolioChart && !portfolioChartCard.hidden) {
+            portfolioChart.applyOptions({
+                width: portfolioChartElement.clientWidth
+            });
+        }
     });
 }

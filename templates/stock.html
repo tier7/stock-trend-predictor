@@ -57,6 +57,57 @@
                 Uruchom model
             </button>
         </div>
+        <div id="backtest-results" class="backtest-card" hidden>
+
+    <h3>Wyniki symulatora</h3>
+    <table class="backtest-table">
+        <thead>
+            <tr>
+                <th>Metryka</th>
+                <th>Model</th>
+                <th>Buy and Hold</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            <tr>
+                <td>Zwrot</td>
+                <td id="model-return">-</td>
+                <td id="buy-hold-return">-</td>
+            </tr>
+
+            <tr>
+                <td>CAGR</td>
+                <td id="model-cagr">-</td>
+                <td id="buy-hold-cagr">-</td>
+            </tr>
+
+            <tr>
+                <td>Maksymalne obsunięcie</td>
+                <td id="model-drawdown">-</td>
+                <td id="buy-hold-drawdown">-</td>
+            </tr>
+
+            <tr>
+                <td>Ekspozycja</td>
+                <td id="model-exposure">-</td>
+                <td>100%</td>
+            </tr>
+
+            <tr>
+                <td>Wartość końcowa</td>
+                <td id="model-final-value">-</td>
+                <td id="buy-hold-final-value">-</td>
+            </tr>
+
+            <tr>
+                <td>Transakcje</td>
+                <td id="model-transactions">-</td>
+                <td>2</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
 
         <div class="indicators-card">
             <div class="section-heading">
@@ -117,9 +168,38 @@
         </div>
     </aside>
 </div>
+<section id="portfolio-chart-card" class="portfolio-chart-card" hidden>
+    <div class="portfolio-chart-heading">
+        <div>
+            <h3>Wartość portfela</h3>
+            <p>Porównanie strategii modelu z Buy and Hold</p>
+        </div>
 
+        <div class="portfolio-chart-legend">
+            <span class="portfolio-legend-item">
+                <span
+                    class="portfolio-legend-line model-line"
+                    aria-hidden="true"
+                ></span>
+                Model
+            </span>
+
+            <span class="portfolio-legend-item">
+                <span
+                    class="portfolio-legend-line buy-hold-line"
+                    aria-hidden="true"
+                ></span>
+                Buy and Hold
+            </span>
+        </div>
+    </div>
+
+    <div
+        id="portfolio-chart"
+        aria-label="Wykres wartości portfela modelu i Buy and Hold"
+    ></div>
+</section>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js', v='prediction-end-date-1') }}"></script>
-
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='portfolio-chart-1') }}"></script>
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

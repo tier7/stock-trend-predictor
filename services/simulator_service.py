@@ -128,6 +128,7 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
         "sell_fee": float(sell_fee),
         "max_drawdown": max_drawdown,
         "cagr": cagr,
+        "equity_history": equity_history
     }
 
 
