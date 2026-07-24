@@ -21,6 +21,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     max_wallet_value = wallet_value
     equity_history = []
     dropdown = 0
+    days_in_market = 0
 
     for prediction in predictions:
         signal = prediction["prediction"]
@@ -48,6 +49,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
 
         if shares > 0:
             wallet_value = cash + shares * valuation_price * (1 - fee_rate)
+            days_in_market += 1
         else:
             wallet_value = cash
         equity_history.append({"date":trade_date, "value": wallet_value })
@@ -56,6 +58,8 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     final_value = equity_history[-1]["value"]
     total_return = final_value / initial_cash - 1
     max_drawdown = calculate_max_drawdown(equity_history, initial_cash)
+    market_exposure = days_in_market/len(predictions)
+
     return {
         "initial_cash": float(initial_cash),
         "final_value": float(final_value),
@@ -65,6 +69,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         "trades": trades,
         "equity_history": equity_history,
         "max_drawdown": max_drawdown,
+        "market_exposure": market_exposure,
     }
 
 def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):

@@ -42,7 +42,7 @@ def evaluate_ticker(ticker):
         "total": data["total_predictions"],
         "model_max_drawdown": model_summary["max_drawdown"],
         "buy_hold_max_drawdown": buy_and_hold_summary["max_drawdown"],
-
+        "model_market_exposure": model_summary["market_exposure"],
         "strategy_return": model_summary["total_return"],
         "buy_hold_return": buy_and_hold_summary["total_return"],
         "return_difference": (
@@ -68,7 +68,7 @@ def print_results(results):
         f"{'Correct':>12}"
         f"{'Model DD':>12}"
         f"{'B&H DD':>12}"
-
+        f"{'Exposure':>12}"
     )
 
     for result in results:
@@ -84,6 +84,7 @@ def print_results(results):
             f"{correct:>12}"
             f"{format_percent(result['model_max_drawdown']):>12}"
             f"{format_percent(result['buy_hold_max_drawdown']):>12}"
+            f"{format_percent(result['model_market_exposure']):>12}"
         )
 def print_backtest_results(results):
     print()
