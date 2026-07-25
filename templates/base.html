@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Analiza cen akcji</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='monochrome-controls-1') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='home-glow-1') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <header>
@@ -13,5 +13,6 @@
     <main>
         {% block content %}{% endblock %}
     </main>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

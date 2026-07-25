@@ -55,19 +55,50 @@ button {
 }
 
 .home-page main {
+    position: relative;
     min-height: calc(100vh - 60px);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 34px;
+    overflow: hidden;
+    isolation: isolate;
+}
+
+.home-page main::before {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    content: "";
+    pointer-events: none;
+    background: radial-gradient(
+        circle 340px at var(--glow-x, 50%) var(--glow-y, 50%),
+        rgba(255, 255, 255, 0.075) 0,
+        rgba(255, 255, 255, 0.025) 34%,
+        transparent 72%
+    );
+    opacity: 0;
+    transition: opacity 220ms ease;
+}
+
+.home-page main.cursor-glow-active::before {
+    opacity: 1;
 }
 
 .home-market {
+    position: relative;
+    z-index: 1;
     width: min(1240px, 100%);
     display: grid;
     grid-template-columns: minmax(190px, 240px) minmax(360px, 1fr) minmax(190px, 240px);
     gap: 32px;
     align-items: center;
+}
+
+@media (pointer: coarse), (prefers-reduced-motion: reduce) {
+    .home-page main::before {
+        display: none;
+    }
 }
 
 .featured-column {
