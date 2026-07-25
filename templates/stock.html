@@ -36,170 +36,263 @@
         </div>
     </div>
 
-    <aside class="stock-sidebar">
-        <div class="card">
-            <p>Ostatnia cena: {{ data.last_price }}</p>
-            <p>Wolumen: {{ data.volume }}</p>
-            <p>Data: {{ data.last_date }}</p>
-            <p>Zmiana: {{ data.price_change }} / {{ data.price_change_percent }}%</p>
-            <p>Predykcja modelu: {{data.prediction}}</p>
-            <div class="prediction-date-row">
-                <label for="start">Start date:</label>
-                <input type="date" id="start" />
+    <aside class="stock-sidebar" aria-label="Panel analizy spółki">
+        <div class="stock-tools">
+            <div class="stock-tools-tabs" role="tablist" aria-label="Narzędzia analizy">
+                <button
+                    type="button"
+                    id="simulator-tab"
+                    class="stock-tools-tab active"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="simulator-panel"
+                    tabindex="0"
+                    data-sidebar-tab="simulator"
+                >
+                    Symulator
+                </button>
+                <button
+                    type="button"
+                    id="indicators-tab"
+                    class="stock-tools-tab"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="indicators-panel"
+                    tabindex="-1"
+                    data-sidebar-tab="indicators"
+                >
+                    Wskaźniki
+                </button>
+                <button
+                    type="button"
+                    id="market-data-tab"
+                    class="stock-tools-tab"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="market-data-panel"
+                    tabindex="-1"
+                    data-sidebar-tab="market-data"
+                >
+                    Dane
+                </button>
             </div>
 
-            <div class="prediction-date-row">
-                <label for="end">End date:</label>
-                <input type="date" id="end" value="{{ data.last_date }}" />
-            </div>
+            <section
+                id="simulator-panel"
+                class="stock-tools-panel"
+                role="tabpanel"
+                aria-labelledby="simulator-tab"
+                data-sidebar-panel="simulator"
+            >
+                <div class="section-heading">
+                    <h3>Symulator strategii</h3>
+                    <span>{{ data.ticker }}</span>
+                </div>
+                <p class="simulator-intro">
+                    Symulacja gra według predykcji modelu vs buy and hold .
+                </p>
 
-            <button type="button" data-indicator="start_prediction">
-                Uruchom model
-            </button>
-        </div>
-        <div id="backtest-results" class="backtest-card" hidden>
+                <div class="simulator-controls">
+                    <h3>Zakres symulacji</h3>
+                    <div class="prediction-date-row">
+                        <label for="start">Data od</label>
+                        <input type="date" id="start" />
+                    </div>
 
-    <h3>Wyniki symulatora</h3>
-    <table class="backtest-table">
-        <thead>
-            <tr>
-                <th>Metryka</th>
-                <th>Model</th>
-                <th>Buy and Hold</th>
-            </tr>
-        </thead>
+                    <div class="prediction-date-row">
+                        <label for="end">Data do</label>
+                        <input type="date" id="end" value="{{ data.last_date }}" />
+                    </div>
 
-        <tbody>
-            <tr>
-                <td>Zwrot</td>
-                <td id="model-return">-</td>
-                <td id="buy-hold-return">-</td>
-            </tr>
+                    <button
+                        type="button"
+                        class="simulator-run-button"
+                        data-indicator="start_prediction"
+                    >
+                        Uruchom model
+                    </button>
+                </div>
 
-            <tr>
-                <td>CAGR</td>
-                <td id="model-cagr">-</td>
-                <td id="buy-hold-cagr">-</td>
-            </tr>
+                <div id="backtest-results" class="backtest-card" hidden>
+                    <h3>Wyniki symulatora</h3>
+                    <table class="backtest-table">
+                        <thead>
+                            <tr>
+                                <th>Metryka</th>
+                                <th>Model</th>
+                                <th>Buy and Hold</th>
+                            </tr>
+                        </thead>
 
-            <tr>
-                <td>Maksymalne obsunięcie</td>
-                <td id="model-drawdown">-</td>
-                <td id="buy-hold-drawdown">-</td>
-            </tr>
+                        <tbody>
+                            <tr>
+                                <td>Zwrot</td>
+                                <td id="model-return">-</td>
+                                <td id="buy-hold-return">-</td>
+                            </tr>
+                            <tr>
+                                <td>CAGR</td>
+                                <td id="model-cagr">-</td>
+                                <td id="buy-hold-cagr">-</td>
+                            </tr>
+                            <tr>
+                                <td>Maksymalne obsunięcie</td>
+                                <td id="model-drawdown">-</td>
+                                <td id="buy-hold-drawdown">-</td>
+                            </tr>
+                            <tr>
+                                <td>Ekspozycja</td>
+                                <td id="model-exposure">-</td>
+                                <td>100%</td>
+                            </tr>
+                            <tr>
+                                <td>Wartość końcowa</td>
+                                <td id="model-final-value">-</td>
+                                <td id="buy-hold-final-value">-</td>
+                            </tr>
+                            <tr>
+                                <td>Transakcje</td>
+                                <td id="model-transactions">-</td>
+                                <td>2</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
 
-            <tr>
-                <td>Ekspozycja</td>
-                <td id="model-exposure">-</td>
-                <td>100%</td>
-            </tr>
+                <section id="portfolio-chart-card" class="portfolio-chart-card" hidden>
+                    <div class="portfolio-chart-heading">
+                        <div>
+                            <h3>Wartość portfela</h3>
+                        </div>
 
-            <tr>
-                <td>Wartość końcowa</td>
-                <td id="model-final-value">-</td>
-                <td id="buy-hold-final-value">-</td>
-            </tr>
+                        <div class="portfolio-chart-legend">
+                            <span class="portfolio-legend-item">
+                                <span
+                                    class="portfolio-legend-line model-line"
+                                    aria-hidden="true"
+                                ></span>
+                                Model
+                            </span>
+                            <span class="portfolio-legend-item">
+                                <span
+                                    class="portfolio-legend-line buy-hold-line"
+                                    aria-hidden="true"
+                                ></span>
+                                Buy and Hold
+                            </span>
+                        </div>
+                    </div>
 
-            <tr>
-                <td>Transakcje</td>
-                <td id="model-transactions">-</td>
-                <td>2</td>
-            </tr>
-        </tbody>
-    </table>
-</div>
+                    <div
+                        id="portfolio-chart"
+                        aria-label="Wykres wartości portfela modelu i Buy and Hold"
+                    ></div>
+                </section>
+            </section>
 
-        <div class="indicators-card">
-            <div class="section-heading">
-                <h3>Technical indicators</h3>
-                <span>Latest values</span>
-            </div>
+            <section
+                id="indicators-panel"
+                class="stock-tools-panel"
+                role="tabpanel"
+                aria-labelledby="indicators-tab"
+                data-sidebar-panel="indicators"
+                hidden
+            >
+                <div class="indicators-card">
+                    <div class="section-heading">
+                        <h3>Wskaźniki techniczne</h3>
+                        <span>Ostatnie wartości</span>
+                    </div>
 
-            <div class="indicator-grid">
-                <div class="indicator-item">
-                    <span>SMA 12</span>
-                    <strong>{{ indicators.sma_12 }}</strong>
+                    <div class="indicator-grid">
+                        <div class="indicator-item">
+                            <span>SMA 12</span>
+                            <strong>{{ indicators.sma_12 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>SMA 26</span>
+                            <strong>{{ indicators.sma_26 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>EMA 12</span>
+                            <strong>{{ indicators.ema_12 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>EMA 26</span>
+                            <strong>{{ indicators.ema_26 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>RSI 14</span>
+                            <strong>{{ indicators.rsi_14 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>MACD</span>
+                            <strong>{{ indicators.macd }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>MACD Signal</span>
+                            <strong>{{ indicators.macd_signal }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>ADX 14</span>
+                            <strong>{{ indicators.adx_14 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>ATR 14</span>
+                            <strong>{{ indicators.atr_14 }}</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>Daily Return</span>
+                            <strong>{{ indicators.daily_return }}%</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>Volatility 20</span>
+                            <strong>{{ indicators.volatility_20 }}%</strong>
+                        </div>
+                        <div class="indicator-item">
+                            <span>Momentum 10</span>
+                            <strong>{{ indicators.momentum_10 }}%</strong>
+                        </div>
+                    </div>
                 </div>
-                <div class="indicator-item">
-                    <span>SMA 26</span>
-                    <strong>{{ indicators.sma_26 }}</strong>
+            </section>
+
+            <section
+                id="market-data-panel"
+                class="stock-tools-panel"
+                role="tabpanel"
+                aria-labelledby="market-data-tab"
+                data-sidebar-panel="market-data"
+                hidden
+            >
+                <div class="section-heading">
+                    <h3>Podsumowanie sesji</h3>
+                    <span>{{ data.ticker }}</span>
                 </div>
-                <div class="indicator-item">
-                    <span>EMA 12</span>
-                    <strong>{{ indicators.ema_12 }}</strong>
+
+                <div class="stock-snapshot">
+                    <div class="stock-snapshot-item">
+                        <span>Ostatnia cena</span>
+                        <strong>{{ data.last_price }}</strong>
+                    </div>
+                    <div class="stock-snapshot-item">
+                        <span>Zmiana</span>
+                        <strong>{{ data.price_change }} / {{ data.price_change_percent }}%</strong>
+                    </div>
+                    <div class="stock-snapshot-item">
+                        <span>Data</span>
+                        <strong>{{ data.last_date }}</strong>
+                    </div>
+                    <div class="stock-snapshot-item">
+                        <span>Wolumen</span>
+                        <strong>{{ data.volume }}</strong>
+                    </div>
                 </div>
-                <div class="indicator-item">
-                    <span>EMA 26</span>
-                    <strong>{{ indicators.ema_26 }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>RSI 14</span>
-                    <strong>{{ indicators.rsi_14 }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>MACD</span>
-                    <strong>{{ indicators.macd }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>MACD Signal</span>
-                    <strong>{{ indicators.macd_signal }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>ADX 14</span>
-                    <strong>{{ indicators.adx_14 }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>ATR 14</span>
-                    <strong>{{ indicators.atr_14 }}</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>Daily Return</span>
-                    <strong>{{ indicators.daily_return }}%</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>Volatility 20</span>
-                    <strong>{{ indicators.volatility_20 }}%</strong>
-                </div>
-                <div class="indicator-item">
-                    <span>Momentum 10</span>
-                    <strong>{{ indicators.momentum_10 }}%</strong>
-                </div>
-            </div>
+            </section>
         </div>
     </aside>
 </div>
-<section id="portfolio-chart-card" class="portfolio-chart-card" hidden>
-    <div class="portfolio-chart-heading">
-        <div>
-            <h3>Wartość portfela</h3>
-            <p>Porównanie strategii modelu z Buy and Hold</p>
-        </div>
-
-        <div class="portfolio-chart-legend">
-            <span class="portfolio-legend-item">
-                <span
-                    class="portfolio-legend-line model-line"
-                    aria-hidden="true"
-                ></span>
-                Model
-            </span>
-
-            <span class="portfolio-legend-item">
-                <span
-                    class="portfolio-legend-line buy-hold-line"
-                    aria-hidden="true"
-                ></span>
-                Buy and Hold
-            </span>
-        </div>
-    </div>
-
-    <div
-        id="portfolio-chart"
-        aria-label="Wykres wartości portfela modelu i Buy and Hold"
-    ></div>
-</section>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js', v='portfolio-chart-1') }}"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='sidebar-tabs-2') }}"></script>
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

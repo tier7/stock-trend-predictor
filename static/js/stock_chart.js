@@ -1,4 +1,20 @@
 const chartElement = document.getElementById("stock-chart");
+const stockChartCardElement = document.querySelector(".stock-layout .chart-card");
+const stockToolsElement = document.querySelector(".stock-tools");
+let stockLayoutResizeObserver = null;
+
+function syncStockToolsHeight() {
+    if (!stockChartCardElement || !stockToolsElement) {
+        return;
+    }
+
+    if (window.innerWidth <= 760) {
+        stockToolsElement.style.removeProperty("height");
+        return;
+    }
+
+    stockToolsElement.style.height = `${stockChartCardElement.offsetHeight}px`;
+}
 
 if (chartElement) {
     const ticker = chartElement.dataset.ticker;
@@ -450,8 +466,65 @@ if (chartElement) {
     const buyHoldFinalValueElement = document.getElementById("buy-hold-final-value");
     const modelTransactionsElement = document.getElementById("model-transactions");
     const portfolioChartCard = document.getElementById("portfolio-chart-card");
-    const portfolioChartElement =document.getElementById("portfolio-chart");
+    const portfolioChartElement = document.getElementById("portfolio-chart");
+    const sidebarTabButtons = Array.from(
+        document.querySelectorAll("[data-sidebar-tab]")
+    );
+    const sidebarTabPanels = Array.from(
+        document.querySelectorAll("[data-sidebar-panel]")
+    );
     let portfolioChart = null;
+
+    function activateSidebarTab(tabName) {
+        sidebarTabButtons.forEach(button => {
+            const isActive = button.dataset.sidebarTab === tabName;
+            button.classList.toggle("active", isActive);
+            button.setAttribute("aria-selected", String(isActive));
+            button.tabIndex = isActive ? 0 : -1;
+        });
+
+        sidebarTabPanels.forEach(panel => {
+            panel.hidden = panel.dataset.sidebarPanel !== tabName;
+        });
+
+        if (tabName === "simulator" && portfolioChart && !portfolioChartCard.hidden) {
+            requestAnimationFrame(() => {
+                portfolioChart.applyOptions({
+                    width: portfolioChartElement.clientWidth
+                });
+            });
+        }
+    }
+
+    sidebarTabButtons.forEach((button, buttonIndex) => {
+        button.addEventListener("click", () => {
+            activateSidebarTab(button.dataset.sidebarTab);
+        });
+
+        button.addEventListener("keydown", event => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                return;
+            }
+
+            event.preventDefault();
+
+            let nextIndex = buttonIndex;
+
+            if (event.key === "ArrowLeft") {
+                nextIndex = (buttonIndex - 1 + sidebarTabButtons.length) % sidebarTabButtons.length;
+            } else if (event.key === "ArrowRight") {
+                nextIndex = (buttonIndex + 1) % sidebarTabButtons.length;
+            } else if (event.key === "Home") {
+                nextIndex = 0;
+            } else if (event.key === "End") {
+                nextIndex = sidebarTabButtons.length - 1;
+            }
+
+            const nextButton = sidebarTabButtons[nextIndex];
+            activateSidebarTab(nextButton.dataset.sidebarTab);
+            nextButton.focus();
+        });
+    });
 
     function formatPercent(value) {
         return `${(Number(value) * 100).toFixed(2)}%`;
@@ -483,7 +556,7 @@ if (chartElement) {
         portfolioChartElement,
         {
             width: portfolioChartElement.clientWidth,
-            height: 360,
+            height: 280,
 
             layout: {
                 background: {
@@ -654,13 +727,21 @@ if (chartElement) {
     }
 
     loadCandles(defaultRange);
+    syncStockToolsHeight();
+
+    if (typeof ResizeObserver !== "undefined" && stockChartCardElement) {
+        stockLayoutResizeObserver = new ResizeObserver(syncStockToolsHeight);
+        stockLayoutResizeObserver.observe(stockChartCardElement);
+    }
 
     window.addEventListener("resize", () => {
+        syncStockToolsHeight();
+
         chart.applyOptions({
             width: chartElement.clientWidth
         });
 
-        if (portfolioChart && !portfolioChartCard.hidden) {
+        if (portfolioChart && portfolioChartCard && !portfolioChartCard.hidden) {
             portfolioChart.applyOptions({
                 width: portfolioChartElement.clientWidth
             });
