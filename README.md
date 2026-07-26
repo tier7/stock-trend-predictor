@@ -5,12 +5,24 @@ Web application for stock market data analysis and evaluating the effectiveness 
 The project is developed as part of engioneering thesis titled  **"Analysis of the Effectiveness of Artificial Intelligence Methods in Predicting the Direction of Stock Price Changes"**. Its goal is to collect and process historical stock market data, visualize selected companies and compare predictive models based on different sets of input features.
 
 ## Running with Docker
+
 Start the application and PostgreSQL:
 
 ```powershell
 docker compose up --build
+```
 
-Open the app:
+Open the application:
+
+```text
 http://localhost:5001
+```
+
+
+## Documentation
+
+Detailed information about the application structure and data flow:
+
+- [Project architecture](docs/architecture.md)
 
 
