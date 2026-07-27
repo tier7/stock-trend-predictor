@@ -14,7 +14,7 @@ def split_dataset_by_date(data, start_date, end_date):
     ]
     return train_df, test_df
 
-def train_and_predict(data, start_date, end_date):
+def train_and_predict(data, start_date, end_date, initial_cash, fee_rate):
     if start_date >= end_date:
         raise ValueError("End date must be later than start date.")
 
@@ -63,8 +63,8 @@ def train_and_predict(data, start_date, end_date):
     result_df["next_date"] = result_df["next_date"].astype(str)
     prediction_records = result_df.to_dict(orient="records")
 
-    modelsim = run_backtest(prediction_records)
-    bahsim = run_buy_and_hold(prediction_records)
+    modelsim = run_backtest(prediction_records, initial_cash, fee_rate)
+    bahsim = run_buy_and_hold(prediction_records,initial_cash,fee_rate)
 
     return {
         "accuracy": float(acc),

@@ -454,6 +454,56 @@ if (chartElement) {
     const predictionEndInput = document.getElementById("end");
     const predictionButton = document.querySelector('button[data-indicator="start_prediction"]');
 
+    function connectRangeWithNumber(rangeId, numberId) {
+        const rangeInput = document.getElementById(rangeId);
+        const numberInput = document.getElementById(numberId);
+
+        if (!rangeInput || !numberInput) {
+            return;
+        }
+
+        rangeInput.addEventListener("input", () => {
+            numberInput.value = rangeInput.value;
+        });
+
+        numberInput.addEventListener("input", () => {
+            if (numberInput.value === "") {
+                return;
+            }
+
+            const value = Number(numberInput.value);
+
+            if (!Number.isFinite(value)) {
+                return;
+            }
+
+            const minimum = Number(rangeInput.min);
+            const maximum = Number(rangeInput.max);
+            const valueForRange = Math.min(maximum, Math.max(minimum, value));
+
+            rangeInput.value = String(valueForRange);
+        });
+
+        numberInput.addEventListener("change", () => {
+            let value = Number(numberInput.value);
+
+            if (numberInput.value === "" || !Number.isFinite(value)) {
+                value = Number(rangeInput.value);
+            }
+
+            value = Math.min(
+                Number(numberInput.max),
+                Math.max(Number(numberInput.min), value)
+            );
+
+            numberInput.value = String(value);
+            rangeInput.value = String(value);
+        });
+    }
+
+    connectRangeWithNumber("fee-range", "fee-value");
+    connectRangeWithNumber("money-range", "money-value");
+
     const backtestResultsElement = document.getElementById("backtest-results");
     const modelReturnElement = document.getElementById("model-return");
     const buyHoldReturnElement = document.getElementById("buy-hold-return");
@@ -657,10 +707,20 @@ if (chartElement) {
                 predictionResultElement.textContent = "Data końcowa musi być późniejsza od początkowej.";
                 return;
             }
+            const feePercent = Number(
+            document.getElementById("fee-value").value
+            );
+
+            const initialCash = Number(
+                document.getElementById("money-value").value
+            );
+
 
             const query = new URLSearchParams({
                 start_date: startDate,
-                end_date: endDate
+                end_date: endDate,
+                fee_rate: feePercent / 100,
+                initial_cash: initialCash
             });
 
             predictionButton.disabled = true;

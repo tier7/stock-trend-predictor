@@ -103,7 +103,59 @@
                         <label for="end">Data do</label>
                         <input type="date" id="end" value="{{ data.last_date }}" />
                     </div>
+                <div class="simulator-parameters">
+                    <div class="simulator-parameter">
+                        <label for="fee-range">Prowizja (%)</label>
 
+                        <div class="range-input-row">
+                            <input
+                                type="range"
+                                id="fee-range"
+                                min="0"
+                                max="5"
+                                step="0.01"
+                                value="0.1"
+                            />
+
+                            <input
+                                type="number"
+                                id="fee-value"
+                                class="range-number"
+                                min="0"
+                                max="5"
+                                step="0.01"
+                                value="0.1"
+                                aria-label="Wartość prowizji w procentach"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="simulator-parameter">
+                        <label for="money-range">Kapitał początkowy</label>
+
+                        <div class="range-input-row">
+                            <input
+                                type="range"
+                                id="money-range"
+                                min="1000"
+                                max="1000000"
+                                step="1000"
+                                value="10000"
+                            />
+
+                            <input
+                                type="number"
+                                id="money-value"
+                                class="range-number"
+                                min="1000"
+                                max="1000000"
+                                step="1"
+                                value="10000"
+                                aria-label="Wartość kapitału początkowego"
+                            />
+                        </div>
+                    </div>
+                </div>
                     <button
                         type="button"
                         class="simulator-run-button"
