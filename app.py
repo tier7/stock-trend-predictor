@@ -207,6 +207,12 @@ def stock_prediction_api(ticker):
     if not start_date or not end_date:
         return jsonify({"error": "Missing start or end date"}), 400
 
+    if initial_cash <= 0:
+        return jsonify({"error": "Initial cash must be greater than zero."}), 400
+
+    if fee_rate < 0:
+        return jsonify({"error": "Fee rate cannot be negative."}), 400
+
     success = ensure_stock_data(ticker, "1d")
     if not success:
         return jsonify({"error": f"No data found for ticker {ticker}"}), 404
