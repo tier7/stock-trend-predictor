@@ -259,3 +259,54 @@ def test_prediction_endpoint_accepts_zero_fee_rate(client,monkeypatch, available
 
     assert response.status_code == 200
     assert received_arguments["fee_rate"] == 0.0
+
+def test_prediction_endpoint_rejects_non_numeric_initial_cash(
+    client,
+    monkeypatch
+):
+    def fake_ensure_stock_data(ticker, interval):
+        return False
+
+    monkeypatch.setattr(
+        app_module,
+        "ensure_stock_data",
+        fake_ensure_stock_data
+    )
+
+    response = client.get(
+        "/api/stock/AAPL/prediction",
+        query_string={
+            "start_date": "2026-01-01",
+            "end_date": "2026-06-01",
+            "initial_cash": "abc",
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Initial cash must be a number."
+    }
+
+def test_prediction_endpoint_rejects_non_numeric_fee_rate(client,monkeypatch):
+    def fake_ensure_stock_data(ticker, interval):
+        return False
+
+    monkeypatch.setattr(
+        app_module,
+        "ensure_stock_data",
+        fake_ensure_stock_data
+    )
+
+    response = client.get(
+        "/api/stock/AAPL/prediction",
+        query_string={
+            "start_date": "2026-01-01",
+            "end_date": "2026-06-01",
+            "fee_rate": "abc",
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Fee rate must be a number."
+    }

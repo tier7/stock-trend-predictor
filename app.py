@@ -25,6 +25,15 @@ FEATURED_STOCKS = (
 def is_valid_ticker_format(ticker):
     return re.match(r"^[A-Z0-9.\-]{1,15}$", ticker) is not None
 
+def parse_float_parameter(value, default, label):
+    if value is None:
+        return float(default)
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a number.")
+
 def build_sparkline_points(values, width=184, height=56, padding=4):
     if not values:
         values = [1, 1]
@@ -201,8 +210,26 @@ def stock_prediction_api(ticker):
     ticker = ticker.upper()
     start_date = request.args.get("start_date")
     end_date = request.args.get("end_date")
-    initial_cash = request.args.get("initial_cash", default=10000, type=float)
-    fee_rate = request.args.get("fee_rate",default=0.001, type=float)
+    initial_cash_value = request.args.get("initial_cash")
+    fee_rate_value = request.args.get("fee_rate")
+
+    if not start_date or not end_date:
+        return jsonify({"error": "Missing start or end date"}), 400
+
+    try:
+        initial_cash = parse_float_parameter(
+            initial_cash_value,
+            10000,
+            "Initial cash"
+        )
+        fee_rate = parse_float_parameter(
+            fee_rate_value,
+            0.001,
+            "Fee rate"
+        )
+    except ValueError as error:
+        return jsonify({
+            "error": str(error)}), 400
 
     if not start_date or not end_date:
         return jsonify({"error": "Missing start or end date"}), 400
