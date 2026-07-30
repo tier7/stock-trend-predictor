@@ -25,7 +25,44 @@ def calculate_cagr(equity_history, initial_value, final_value):
     cagr = (final_value / initial_value) ** (1 / years) - 1
     return float(cagr)
 
+def days_between(start_date, end_date):
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
 
+    return (end - start).days
+
+def build_closed_trades(trades):
+    closed_trades = []
+    current_buy = None
+
+    for trade in trades:
+        if trade["type"] == "BUY":
+            current_buy = trade
+        elif trade["type"] == "SELL" and current_buy is not None:
+            shares = trade["shares"]
+            buy_value = current_buy["price"] * shares
+            buy_cost = buy_value + current_buy["fee"]
+            sell_value = trade["price"] * shares
+            sell_proceeds = sell_value - trade["fee"]
+            profit = sell_proceeds - buy_cost
+            return_rate = profit / buy_cost
+
+            closed_trade = {
+                "buy_date": current_buy["date"],
+                "sell_date": trade["date"],
+                "buy_price": current_buy["price"],
+                "sell_price": trade["price"],
+                "shares": trade["shares"],
+                "buy_fee": current_buy["fee"],
+                "sell_fee": trade["fee"],
+                "total_fees": trade["fee"] + current_buy["fee"],
+                "profit": profit,
+                "return_rate": return_rate,
+                "holding_days": days_between(current_buy["date"], trade["date"])
+            }
+            closed_trades.append(closed_trade)
+            current_buy = None
+    return closed_trades
 
 def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     if not predictions:
@@ -78,6 +115,8 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     market_exposure = days_in_market/len(predictions)
     cagr = calculate_cagr(equity_history, initial_cash, final_value)
 
+    closed_trades = build_closed_trades(trades)
+
     return {
         "initial_cash": float(initial_cash),
         "final_value": float(final_value),
@@ -89,6 +128,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         "max_drawdown": max_drawdown,
         "market_exposure": market_exposure,
         "cagr": cagr,
+        "closed_trades": closed_trades
     }
 
 def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):

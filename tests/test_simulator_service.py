@@ -67,6 +67,13 @@ def test_run_backtest_buys_then_sells_with_profit():
     assert result["market_exposure"] == pytest.approx(0.50)
     assert result["trades"][0]["type"] == "BUY"
     assert result["trades"][1]["type"] == "SELL"
+    assert len(result["closed_trades"]) == 1
+
+    closed_trade = result["closed_trades"][0]
+    assert closed_trade["profit"] == pytest.approx(2000)
+    assert closed_trade["return_rate"] == pytest.approx(0.20)
+    assert closed_trade["holding_days"] == 1
+    assert closed_trade["total_fees"] == 0
 
 
 def test_run_backtest_applies_transaction_fees():
@@ -91,6 +98,10 @@ def test_run_backtest_applies_transaction_fees():
     assert result_with_fee["final_value"] < result_without_fee["final_value"]
     assert result_with_fee["trades"][0]["fee"] > 0
     assert result_with_fee["trades"][1]["fee"] > 0
+    closed_trade = result_with_fee["closed_trades"][0]
+
+    assert closed_trade["total_fees"] == pytest.approx(result_with_fee["trades"][0]["fee"]+ result_with_fee["trades"][1]["fee"])
+    assert closed_trade["profit"] == pytest.approx(result_with_fee["final_value"]- result_with_fee["initial_cash"])
 
 def test_run_backtest_with_empty_predictions():
     predictions = []
@@ -118,6 +129,7 @@ def test_run_backtest_with_open_position_at_end():
     assert result["position_open"] is True
     assert result["total_transactions"] == 1
     assert result["trades"][0]["type"] == "BUY"
+    assert result["closed_trades"] == []
 
 def test_run_buy_and_hold_returns_expected_profit():
     predictions = [
