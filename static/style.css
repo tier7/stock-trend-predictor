@@ -619,6 +619,89 @@ button {
     color: #fff2bd;
 }
 
+.model-stats-card {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid #1d2838;
+    color: var(--text);
+}
+
+.model-stats-card[hidden] {
+    display: none;
+}
+
+.model-stats-card h3 {
+    margin: 0 0 14px;
+    font-size: 16px;
+    line-height: 1.2;
+}
+
+.model-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 13px;
+}
+
+.model-stats-table th,
+.model-stats-table td {
+    padding: 9px 8px;
+    border-bottom: 1px solid #1d2838;
+    vertical-align: middle;
+}
+
+.model-stats-table th {
+    color: var(--muted);
+    background: var(--panel-strong);
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.model-stats-table th:first-child,
+.model-stats-table td:first-child {
+    width: 68%;
+    text-align: left;
+}
+
+.model-stats-table th:last-child,
+.model-stats-table td:last-child {
+    width: 32%;
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.model-stats-table tbody tr {
+    transition: background 140ms ease;
+}
+
+.model-stats-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.model-stats-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.model-stats-table td:last-child {
+    color: #e8edf4;
+    font-weight: 700;
+}
+
+#model-profitable {
+    color: var(--green);
+}
+
+#model-unprofitable {
+    color: var(--red);
+}
+
+#model-winratio {
+    color: var(--text);
+}
+
 .portfolio-chart-card {
     margin-top: 22px;
     padding-top: 18px;
@@ -998,6 +1081,15 @@ button {
     .backtest-table th,
     .backtest-table td {
         padding: 9px 7px;
+    }
+
+    .model-stats-card {
+        padding-top: 16px;
+    }
+
+    .model-stats-table th,
+    .model-stats-table td {
+        padding: 9px 6px;
     }
 
     .stock-tools-tabs {

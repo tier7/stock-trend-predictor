@@ -517,6 +517,11 @@ if (chartElement) {
     const modelTransactionsElement = document.getElementById("model-transactions");
     const portfolioChartCard = document.getElementById("portfolio-chart-card");
     const portfolioChartElement = document.getElementById("portfolio-chart");
+    const modelStatsElement = document.getElementById("model-stats");
+    const modelClosedTransactionsElement = document.getElementById("model-closed-transactions");
+    const modelProfitableElement = document.getElementById("model-profitable");
+    const modelUnprofitableElement = document.getElementById("model-unprofitable");
+    const modelWinRatioElement =document.getElementById("model-winratio");
     const sidebarTabButtons = Array.from(
         document.querySelectorAll("[data-sidebar-tab]")
     );
@@ -726,6 +731,7 @@ if (chartElement) {
             predictionButton.disabled = true;
             backtestResultsElement.hidden = true;
             portfolioChartCard.hidden = true;
+            modelStatsElement.hidden = true;
             predictionResultElement.textContent = "Trenowanie modelu...";
 
             fetch(`/api/stock/${ticker}/prediction?${query}`, {
@@ -749,6 +755,10 @@ if (chartElement) {
                     console.log("Prediction result:", data);
                     const modelSummary = data.model_summary;
                     const buyHoldSummary = data.buyandhold_summary;
+                    modelClosedTransactionsElement.textContent = modelSummary.closed_trades.length;
+                    modelProfitableElement.textContent = modelSummary.profitable_trades;
+                    modelUnprofitableElement.textContent =modelSummary.losing_trades;
+                    modelWinRatioElement.textContent = formatPercent(modelSummary.win_rate);
                     modelReturnElement.textContent = formatPercent(modelSummary.total_return);
                     buyHoldReturnElement.textContent = formatPercent(buyHoldSummary.total_return);
                     modelCagrElement.textContent = formatPercent(modelSummary.cagr);
@@ -760,6 +770,7 @@ if (chartElement) {
                     buyHoldFinalValueElement.textContent = formatMoney(buyHoldSummary.final_value);
                     modelTransactionsElement.textContent = modelSummary.total_transactions;
                     backtestResultsElement.hidden = false;
+                    modelStatsElement.hidden = false;
                     renderPortfolioChart(modelSummary.equity_history,buyHoldSummary.equity_history);
                 })
                 .catch(error => {
