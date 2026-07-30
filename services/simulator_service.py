@@ -64,6 +64,26 @@ def build_closed_trades(trades):
             current_buy = None
     return closed_trades
 
+def calculate_trades_stats(closed_trades):
+    profitable_trades = 0
+    losing_trades = 0
+
+    for trade in closed_trades:
+        profit = float(trade["profit"])
+
+        if profit > 0:
+            profitable_trades += 1
+        else:
+            losing_trades += 1
+
+    total_trades = len(closed_trades)
+    if total_trades > 0:
+        win_rate = profitable_trades / total_trades
+    else:
+        win_rate = 0.0
+
+    return profitable_trades, losing_trades, win_rate
+
 def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     if not predictions:
         raise ValueError("No predictions available for backtest.")
@@ -116,6 +136,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
     cagr = calculate_cagr(equity_history, initial_cash, final_value)
 
     closed_trades = build_closed_trades(trades)
+    profitable_trans, unprofitable_trans, winrate = calculate_trades_stats(closed_trades)
 
     return {
         "initial_cash": float(initial_cash),
@@ -128,7 +149,10 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         "max_drawdown": max_drawdown,
         "market_exposure": market_exposure,
         "cagr": cagr,
-        "closed_trades": closed_trades
+        "closed_trades": closed_trades,
+        "profitable_trades": profitable_trans,
+        "losing_trades": unprofitable_trans,
+        "win_rate": winrate,
     }
 
 def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):

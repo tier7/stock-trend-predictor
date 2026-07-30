@@ -74,6 +74,30 @@ def test_run_backtest_buys_then_sells_with_profit():
     assert closed_trade["return_rate"] == pytest.approx(0.20)
     assert closed_trade["holding_days"] == 1
     assert closed_trade["total_fees"] == 0
+    assert result["profitable_trades"] == 1
+    assert result["losing_trades"] == 0
+    assert result["win_rate"] == pytest.approx(1.0)
+
+def test_run_backtest_counts_losing_trade():
+    predictions = [
+        {
+            "prediction": 1,
+            "next_date": "2026-01-01",
+            "next_open": 100,
+            "next_close": 100,
+        },
+        {
+            "prediction": 0,
+            "next_date": "2026-01-02",
+            "next_open": 80,
+            "next_close": 80,
+        },
+    ]
+    result = run_backtest(predictions=predictions,initial_cash=10000,fee_rate=0,)
+    assert result["profitable_trades"] == 0
+    assert result["losing_trades"] == 1
+    assert result["win_rate"] == 0
+    assert result["closed_trades"][0]["profit"] == pytest.approx(-2000)
 
 
 def test_run_backtest_applies_transaction_fees():
@@ -130,6 +154,9 @@ def test_run_backtest_with_open_position_at_end():
     assert result["total_transactions"] == 1
     assert result["trades"][0]["type"] == "BUY"
     assert result["closed_trades"] == []
+    assert result["profitable_trades"] == 0
+    assert result["losing_trades"] == 0
+    assert result["win_rate"] == 0
 
 def test_run_buy_and_hold_returns_expected_profit():
     predictions = [
