@@ -1,6 +1,8 @@
 import pandas as pd
+from services.stock_data_quality_service import filter_valid_ohlc
 
 def resample_data(data,interval):
+    data = filter_valid_ohlc(data)
     if interval == "1d":
         return data.copy()
 

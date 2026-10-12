@@ -89,10 +89,18 @@
                     <span>{{ data.ticker }}</span>
                 </div>
                 <p class="simulator-intro">
-                    Symulacja gra według predykcji modelu vs buy and hold .
+                    Porównaj strategię modelu z Buy and Hold na historycznych danych.
                 </p>
 
                 <div class="simulator-controls">
+                    <div class="prediction-date-row">
+                        <label for="simulation-model">Model</label>
+                        <select id="simulation-model" aria-describedby="simulation-model-description">
+                            <option value="global" selected>Model globalny</option>
+                            <option value="local">Model lokalny</option>
+                        </select>
+                    </div>
+                    <p id="simulation-model-description" class="model-mode-note" role="status" aria-live="polite">Wczytywanie gotowego modelu globalnego…</p>
                     <h3>Zakres symulacji</h3>
                     <div class="prediction-date-row">
                         <label for="start">Data od</label>
@@ -103,24 +111,33 @@
                         <label for="end">Data do</label>
                         <input type="date" id="end" value="{{ data.last_date }}" />
                     </div>
-                <div class="simulator-parameters">
-                    <div class="simulator-parameter">
-                        <label for="fee-range">Prowizja (%)</label>
-
-                        <div class="range-input-row">
+                    <div class="simulator-parameters">
+                        <div class="simulator-parameter confidence-parameter">
+                            <div class="confidence-heading">
+                                <label for="confidence-threshold">Próg pewności</label>
+                                <output id="confidence-threshold-value" for="confidence-threshold">60%</output>
+                            </div>
                             <input
                                 type="range"
-                                id="fee-range"
-                                min="0"
-                                max="5"
-                                step="0.01"
-                                value="0.1"
+                                id="confidence-threshold"
+                                min="50"
+                                max="100"
+                                step="1"
+                                value="60"
+                                aria-describedby="confidence-threshold-description"
                             />
-
+                            <p id="confidence-threshold-description" class="confidence-description">
+                                Kupno: szansa wzrostu ≥ 60%. Sprzedaż: szansa wzrostu ≤ 40%.
+                                Pomiędzy progami utrzymujesz obecną pozycję.
+                            </p>
+                            <p class="confidence-description">Próg wpływa na transakcje, nie zmienia prognoz modelu.</p>
+                        </div>
+                        <div class="simulator-parameter">
+                            <label for="fee-value">Prowizja (%)</label>
                             <input
                                 type="number"
                                 id="fee-value"
-                                class="range-number"
+                                class="simulator-number"
                                 min="0"
                                 max="5"
                                 step="0.01"
@@ -128,25 +145,12 @@
                                 aria-label="Wartość prowizji w procentach"
                             />
                         </div>
-                    </div>
-
-                    <div class="simulator-parameter">
-                        <label for="money-range">Kapitał początkowy</label>
-
-                        <div class="range-input-row">
-                            <input
-                                type="range"
-                                id="money-range"
-                                min="1000"
-                                max="1000000"
-                                step="1000"
-                                value="10000"
-                            />
-
+                        <div class="simulator-parameter">
+                            <label for="money-value">Kapitał początkowy</label>
                             <input
                                 type="number"
                                 id="money-value"
-                                class="range-number"
+                                class="simulator-number"
                                 min="1000"
                                 max="1000000"
                                 step="1"
@@ -155,14 +159,15 @@
                             />
                         </div>
                     </div>
-                </div>
                     <button
                         type="button"
+                        id="simulation-run-button"
                         class="simulator-run-button"
-                        data-indicator="start_prediction"
+                        disabled
                     >
-                        Uruchom model
+                        Uruchom symulację
                     </button>
+                    <p id="prediction-result" role="status" aria-live="polite"></p>
                 </div>
 
                 <div id="backtest-results" class="backtest-card" hidden>
@@ -377,6 +382,6 @@
     </aside>
 </div>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/stock_chart.js', v='sidebar-tabs-2') }}"></script>
+<script src="{{ url_for('static', filename='js/stock_chart.js', v='confidence-slider-1') }}"></script>
 <a href="{{ url_for('index') }}">Wróć do wyboru spółki</a>
 {% endblock %}

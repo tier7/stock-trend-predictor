@@ -1,4 +1,5 @@
 import pandas as pd
+from services.stock_data_quality_service import mask_invalid_ohlc
 
 def calc_sma(data, period):
     data = data.copy()
@@ -146,6 +147,7 @@ def calc_atr(data, period):
     return atr
 
 def calculate_all_indicators(data):
+    data = mask_invalid_ohlc(data)
     result = data.copy()
 
     result["sma_12"] = calc_sma(data, 12)

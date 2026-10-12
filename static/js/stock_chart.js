@@ -452,57 +452,16 @@ if (chartElement) {
 
     const predictionStartInput = document.getElementById("start");
     const predictionEndInput = document.getElementById("end");
-    const predictionButton = document.querySelector('button[data-indicator="start_prediction"]');
-
-    function connectRangeWithNumber(rangeId, numberId) {
-        const rangeInput = document.getElementById(rangeId);
-        const numberInput = document.getElementById(numberId);
-
-        if (!rangeInput || !numberInput) {
-            return;
-        }
-
-        rangeInput.addEventListener("input", () => {
-            numberInput.value = rangeInput.value;
-        });
-
-        numberInput.addEventListener("input", () => {
-            if (numberInput.value === "") {
-                return;
-            }
-
-            const value = Number(numberInput.value);
-
-            if (!Number.isFinite(value)) {
-                return;
-            }
-
-            const minimum = Number(rangeInput.min);
-            const maximum = Number(rangeInput.max);
-            const valueForRange = Math.min(maximum, Math.max(minimum, value));
-
-            rangeInput.value = String(valueForRange);
-        });
-
-        numberInput.addEventListener("change", () => {
-            let value = Number(numberInput.value);
-
-            if (numberInput.value === "" || !Number.isFinite(value)) {
-                value = Number(rangeInput.value);
-            }
-
-            value = Math.min(
-                Number(numberInput.max),
-                Math.max(Number(numberInput.min), value)
-            );
-
-            numberInput.value = String(value);
-            rangeInput.value = String(value);
-        });
-    }
-
-    connectRangeWithNumber("fee-range", "fee-value");
-    connectRangeWithNumber("money-range", "money-value");
+    const predictionButton = document.getElementById("simulation-run-button");
+    const simulationModelSelect = document.getElementById("simulation-model");
+    const modelDescription = document.getElementById("simulation-model-description");
+    const confidenceThresholdInput = document.getElementById("confidence-threshold");
+    const confidenceThresholdValue = document.getElementById("confidence-threshold-value");
+    const confidenceThresholdDescription = document.getElementById("confidence-threshold-description");
+    let activeGlobalModel = null;
+    let globalModelLoading = true;
+    let globalModelError = "";
+    let simulationBusy = false;
 
     const backtestResultsElement = document.getElementById("backtest-results");
     const modelReturnElement = document.getElementById("model-return");
@@ -698,89 +657,178 @@ if (chartElement) {
         predictionButton.insertAdjacentElement("afterend", predictionResultElement);
     }
 
-    if (predictionButton && predictionStartInput && predictionEndInput) {
-        predictionButton.addEventListener("click", () => {
-            const startDate = predictionStartInput.value;
-            const endDate = predictionEndInput.value;
+    async function fetchJson(url, options = {}) {
+        const response = await fetch(url, { cache: "no-store", ...options });
+        let data;
+        try {
+            data = await response.json();
+        } catch {
+            throw new Error("Serwer nie zwrócił wyników. Sprawdź, czy aplikacja działa.");
+        }
+        if (!response.ok) {
+            throw new Error(data.error || "Nie udało się wykonać operacji.");
+        }
+        return data;
+    }
 
-            if (!startDate || !endDate) {
-                predictionResultElement.textContent = "Wybierz datę początku i końca testu.";
+    function updateSimulationControls() {
+        const isGlobal = simulationModelSelect.value === "global";
+        predictionButton.disabled = simulationBusy || (isGlobal && (globalModelLoading || !activeGlobalModel));
+        simulationModelSelect.disabled = simulationBusy;
+        confidenceThresholdInput.disabled = simulationBusy;
+        predictionButton.textContent = simulationBusy ? "Trwa symulacja…" : "Uruchom symulację";
+        if (isGlobal && activeGlobalModel) {
+            const cutoff = activeGlobalModel.training_cutoff;
+            predictionStartInput.min = cutoff;
+            if (!predictionStartInput.value) predictionStartInput.value = cutoff;
+            modelDescription.textContent =
+                `Gotowy model uczony na ${activeGlobalModel.train_tickers.length} spółkach. Symulacja od ${cutoff}, bez ponownego uczenia.`;
+        } else {
+            predictionStartInput.removeAttribute("min");
+            modelDescription.textContent = isGlobal
+                ? (globalModelLoading ? "Wczytywanie gotowego modelu globalnego…" : globalModelError)
+                : `Model uczy się na historii ${ticker} i ponawia uczenie co 20 sesji.`;
+        }
+    }
+
+    async function refreshActiveGlobalModel() {
+        try {
+            const data = await fetchJson("/api/models/global/active");
+            activeGlobalModel = data.model;
+        } catch (error) {
+            globalModelError = error.message;
+        } finally {
+            globalModelLoading = false;
+            updateSimulationControls();
+        }
+    }
+
+    function clearSimulationResults() {
+        predictionResultElement.textContent = "";
+        backtestResultsElement.hidden = true;
+        portfolioChartCard.hidden = true;
+        modelStatsElement.hidden = true;
+    }
+
+    function describeConfidenceThreshold() {
+        const percentage = Number(confidenceThresholdInput.value);
+        confidenceThresholdValue.value = `${percentage}%`;
+        confidenceThresholdDescription.textContent = percentage === 50
+            ? "Kupno: szansa wzrostu > 50%. Sprzedaż: szansa wzrostu < 50%. Przy dokładnie 50% utrzymujesz obecną pozycję."
+            : `Kupno: szansa wzrostu ≥ ${percentage}%. Sprzedaż: szansa wzrostu ≤ ${100 - percentage}%. Pomiędzy progami utrzymujesz obecną pozycję.`;
+        confidenceThresholdInput.setAttribute("aria-valuetext", confidenceThresholdDescription.textContent);
+    }
+
+    function renderSimulation(data, modelLabel) {
+        predictionResultElement.textContent =
+            `${modelLabel}: skuteczność ${(data.accuracy * 100).toFixed(2)}% (${data.correct_predictions}/${data.total_predictions}). Próg: ${Math.round(data.model_summary.confidence_threshold * 100)}%.`;
+        const modelSummary = data.model_summary;
+        const buyHoldSummary = data.buyandhold_summary;
+        modelClosedTransactionsElement.textContent = modelSummary.closed_trades.length;
+        modelProfitableElement.textContent = modelSummary.profitable_trades;
+        modelUnprofitableElement.textContent = modelSummary.losing_trades;
+        modelWinRatioElement.textContent = formatPercent(modelSummary.win_rate);
+        modelReturnElement.textContent = formatPercent(modelSummary.total_return);
+        buyHoldReturnElement.textContent = formatPercent(buyHoldSummary.total_return);
+        modelCagrElement.textContent = formatPercent(modelSummary.cagr);
+        buyHoldCagrElement.textContent = formatPercent(buyHoldSummary.cagr);
+        modelDrawdownElement.textContent = formatPercent(modelSummary.max_drawdown);
+        buyHoldDrawdownElement.textContent = formatPercent(buyHoldSummary.max_drawdown);
+        modelExposureElement.textContent = formatPercent(modelSummary.market_exposure);
+        modelFinalValueElement.textContent = formatMoney(modelSummary.final_value);
+        buyHoldFinalValueElement.textContent = formatMoney(buyHoldSummary.final_value);
+        modelTransactionsElement.textContent = modelSummary.total_transactions;
+        backtestResultsElement.hidden = false;
+        modelStatsElement.hidden = false;
+        renderPortfolioChart(modelSummary.equity_history, buyHoldSummary.equity_history);
+    }
+
+    async function runSimulation() {
+        if (simulationBusy) return;
+        const mode = simulationModelSelect.value;
+        const startDate = predictionStartInput.value;
+        const endDate = predictionEndInput.value;
+
+        if (!startDate || !endDate) {
+            predictionResultElement.textContent = "Wybierz datę początku i końca testu.";
+            return;
+        }
+
+        if (startDate >= endDate) {
+            predictionResultElement.textContent = "Data końcowa musi być późniejsza od początkowej.";
+            return;
+        }
+        const feeInput = document.getElementById("fee-value");
+        const cashInput = document.getElementById("money-value");
+        const feePercent = Number(feeInput.value);
+        const initialCash = Number(cashInput.value);
+        const confidencePercent = Number(confidenceThresholdInput.value);
+        if (!feeInput.value || !cashInput.value || !Number.isFinite(feePercent) || feePercent < 0 || !Number.isFinite(initialCash) || initialCash <= 0) {
+            predictionResultElement.textContent = "Podaj dodatni kapitał i nieujemną prowizję.";
+            return;
+        }
+        if (!Number.isFinite(confidencePercent) || confidencePercent < 50 || confidencePercent > 100) {
+            predictionResultElement.textContent = "Ustaw próg pewności od 50% do 100%.";
+            return;
+        }
+        if (mode === "global") {
+            if (!activeGlobalModel || startDate < activeGlobalModel.training_cutoff) {
+                predictionResultElement.textContent = activeGlobalModel
+                    ? `Ten model można testować od ${activeGlobalModel.training_cutoff}. Wybierz późniejszy początek symulacji.`
+                    : "Brak gotowego modelu globalnego. Wybierz model lokalny.";
                 return;
             }
+        }
+        const parameters = {
+            start_date: startDate,
+            end_date: endDate,
+            fee_rate: feePercent / 100,
+            initial_cash: initialCash,
+            confidence_threshold: confidencePercent / 100
+        };
 
-            if (startDate >= endDate) {
-                predictionResultElement.textContent = "Data końcowa musi być późniejsza od początkowej.";
-                return;
-            }
-            const feePercent = Number(
-            document.getElementById("fee-value").value
-            );
-
-            const initialCash = Number(
-                document.getElementById("money-value").value
-            );
-
-
-            const query = new URLSearchParams({
-                start_date: startDate,
-                end_date: endDate,
-                fee_rate: feePercent / 100,
-                initial_cash: initialCash
-            });
-
-            predictionButton.disabled = true;
-            backtestResultsElement.hidden = true;
-            portfolioChartCard.hidden = true;
-            modelStatsElement.hidden = true;
-            predictionResultElement.textContent = "Trenowanie modelu...";
-
-            fetch(`/api/stock/${ticker}/prediction?${query}`, {
-                cache: "no-store"
-            })
-                .then(response => {
-                    return response.json().then(data => {
-                        if (!response.ok) {
-                            throw new Error(data.error || "Nie udalo sie uruchomic predykcji");
-                        }
-
-                        return data;
-                    });
-                })
-                .then(data => {
-                    const accuracyPercent = (data.accuracy * 100).toFixed(2);
-
-                    predictionResultElement.textContent =
-                        `Skutecznosc modelu: ${accuracyPercent}% (${data.correct_predictions}/${data.total_predictions})`;
-
-                    console.log("Prediction result:", data);
-                    const modelSummary = data.model_summary;
-                    const buyHoldSummary = data.buyandhold_summary;
-                    modelClosedTransactionsElement.textContent = modelSummary.closed_trades.length;
-                    modelProfitableElement.textContent = modelSummary.profitable_trades;
-                    modelUnprofitableElement.textContent =modelSummary.losing_trades;
-                    modelWinRatioElement.textContent = formatPercent(modelSummary.win_rate);
-                    modelReturnElement.textContent = formatPercent(modelSummary.total_return);
-                    buyHoldReturnElement.textContent = formatPercent(buyHoldSummary.total_return);
-                    modelCagrElement.textContent = formatPercent(modelSummary.cagr);
-                    buyHoldCagrElement.textContent = formatPercent(buyHoldSummary.cagr);
-                    modelDrawdownElement.textContent = formatPercent(modelSummary.max_drawdown);
-                    buyHoldDrawdownElement.textContent = formatPercent(buyHoldSummary.max_drawdown);
-                    modelExposureElement.textContent = formatPercent(modelSummary.market_exposure);
-                    modelFinalValueElement.textContent = formatMoney(modelSummary.final_value);
-                    buyHoldFinalValueElement.textContent = formatMoney(buyHoldSummary.final_value);
-                    modelTransactionsElement.textContent = modelSummary.total_transactions;
-                    backtestResultsElement.hidden = false;
-                    modelStatsElement.hidden = false;
-                    renderPortfolioChart(modelSummary.equity_history,buyHoldSummary.equity_history);
-                })
-                .catch(error => {
-                    console.error("Prediction error:", error);
-                    predictionResultElement.textContent = error.message;
-                })
-                .finally(() => {
-                    predictionButton.disabled = false;
+        simulationBusy = true;
+        updateSimulationControls();
+        clearSimulationResults();
+        predictionResultElement.textContent = mode === "global"
+            ? "Symulacja gotowym modelem globalnym…"
+            : "Uczenie modelu lokalnego i symulacja…";
+        try {
+            let data;
+            let modelLabel;
+            if (mode === "global") {
+                data = await fetchJson(`/api/stock/${ticker}/global-simulation`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ...parameters, model_id: activeGlobalModel.model_id })
                 });
+                modelLabel = "Model globalny";
+            } else {
+                data = await fetchJson(`/api/stock/${ticker}/prediction?${new URLSearchParams(parameters)}`);
+                modelLabel = "Model lokalny";
+            }
+            renderSimulation(data, modelLabel);
+        } catch (error) {
+            predictionResultElement.textContent = error.message;
+        } finally {
+            simulationBusy = false;
+            updateSimulationControls();
+        }
+    }
+
+    if (predictionButton && simulationModelSelect && predictionStartInput && predictionEndInput) {
+        predictionButton.addEventListener("click", runSimulation);
+        confidenceThresholdInput.addEventListener("input", () => {
+            describeConfidenceThreshold();
+            clearSimulationResults();
         });
+        simulationModelSelect.addEventListener("change", () => {
+            clearSimulationResults();
+            updateSimulationControls();
+        });
+        updateSimulationControls();
+        describeConfidenceThreshold();
+        refreshActiveGlobalModel();
     }
 
     indicatorButtons.forEach(button => {

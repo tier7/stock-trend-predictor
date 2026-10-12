@@ -1,4 +1,18 @@
 from datetime import date
+from math import isfinite
+
+
+DEFAULT_CONFIDENCE_THRESHOLD = 0.6
+
+
+def validate_confidence_threshold(value):
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Próg pewności musi być liczbą od 50% do 100%.")
+    if not isfinite(threshold) or not 0.5 <= threshold <= 1:
+        raise ValueError("Próg pewności musi być liczbą od 50% do 100%.")
+    return threshold
 
 
 def calculate_max_drawdown(equity_history, initial_cash):
@@ -84,15 +98,18 @@ def calculate_trades_stats(closed_trades):
 
     return profitable_trades, losing_trades, win_rate
 
-def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
+def run_backtest(predictions, initial_cash=10000, fee_rate=0.001,
+                 confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
     if not predictions:
         raise ValueError("No predictions available for backtest.")
+    buy_threshold = validate_confidence_threshold(confidence_threshold)
+    sell_threshold = round(1 - buy_threshold, 12)
     cash = initial_cash
     shares = 0
     trades = []
     wallet_value = cash
     max_wallet_value = wallet_value
-    equity_history = []
+    equity_history = [{"date": predictions[0]["next_date"],"value": float(initial_cash)}]
     dropdown = 0
     days_in_market = 0
     cagr = 0
@@ -101,10 +118,12 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
         signal = prediction["prediction"]
         price = float(prediction["next_open"])
         trade_date = prediction["next_date"]
-        valuation_price = float(prediction["next_close"])
+        valuation_price = float(prediction["target_end_open"])
+        valuation_date = prediction["target_end_date"]
+        probability_up = float(prediction["probability_up"])
 
-
-        if signal == 1 and cash > 0:
+        # An exact 50/50 prediction keeps the position, even at the lowest threshold.
+        if probability_up >= buy_threshold and probability_up > 0.5 and cash > 0:
             trade_value = cash / (1 + fee_rate)
             fee = trade_value * fee_rate
             shares = trade_value / price
@@ -112,7 +131,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
 
             trades.append({"type": "BUY","date": trade_date,"price": price,"shares": shares,"fee": fee})
 
-        elif signal == 0 and shares > 0:
+        elif probability_up <= sell_threshold and probability_up < 0.5 and shares > 0:
             sold_shares = shares
             gross_value = sold_shares * price
             fee = gross_value * fee_rate
@@ -126,7 +145,7 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
             days_in_market += 1
         else:
             wallet_value = cash
-        equity_history.append({"date":trade_date, "value": wallet_value })
+        equity_history.append({"date":valuation_date, "value": wallet_value })
 
     position_open = shares > 0
     final_value = equity_history[-1]["value"]
@@ -140,6 +159,9 @@ def run_backtest(predictions, initial_cash=10000, fee_rate=0.001):
 
     return {
         "initial_cash": float(initial_cash),
+        "confidence_threshold": buy_threshold,
+        "buy_threshold": buy_threshold,
+        "sell_threshold": sell_threshold,
         "final_value": float(final_value),
         "total_return": float(total_return),
         "position_open": position_open,
@@ -160,7 +182,7 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
         raise ValueError("No predictions available for buy and hold.")
 
     buy_price = float(predictions[0]["next_open"])
-    final_price = float(predictions[-1]["next_close"])
+    final_price = float(predictions[-1]["target_end_open"])
 
     trade_value = initial_cash / (1 + fee_rate)
     buy_fee = trade_value * fee_rate
@@ -171,13 +193,13 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
     final_value = gross_value - sell_fee
     total_return = final_value / initial_cash - 1
 
-    equity_history = []
+    equity_history = [{"date": predictions[0]["next_date"],"value": float(initial_cash)}]
     for prediction in predictions:
-        valuation_price = float(prediction["next_close"])
+        valuation_price = float(prediction["target_end_open"])
         value = shares * valuation_price * (1 - fee_rate)
 
         equity_history.append({
-            "date": prediction["next_date"],
+            "date": prediction["target_end_date"],
             "value": value,
         })
     max_drawdown = calculate_max_drawdown(equity_history,initial_cash,)

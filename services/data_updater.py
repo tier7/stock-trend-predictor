@@ -1,6 +1,10 @@
 from services.data_fetcher import fetch_stock_data
 from services.db import get_connection, save_stock_data
 from datetime import datetime, timedelta
+from services.stock_data_quality_service import VALID_OHLC_SQL
+
+
+REFRESH_LOOKBACK_DAYS = 30
 
 
 def get_next_day(datestr):
@@ -12,11 +16,14 @@ def ensure_stock_data(ticker, interval="1d"):
     conn = get_connection()
     cur = conn.cursor()
     ticker = ticker.upper()
-    cur.execute("SELECT date FROM stock_prices WHERE ticker = %s AND interval = %s ORDER BY date DESC LIMIT 1", (ticker,interval))
+    cur.execute(
+        f"SELECT MAX(date), MAX(date) FILTER (WHERE {VALID_OHLC_SQL}) "
+        "FROM stock_prices WHERE ticker = %s AND interval = %s", (ticker, interval),
+    )
     row = cur.fetchone()
     conn.close()
 
-    if row is None:
+    if row is None or row[0] is None:
         print(f"No stock data for {ticker}. Downloading max period data")
         data = fetch_stock_data(ticker=ticker, interval=interval, period="max")
         if data.empty:
@@ -28,17 +35,22 @@ def ensure_stock_data(ticker, interval="1d"):
         return True
 
     last_date = row[0]
-    if last_date == datetime.today().strftime('%Y-%m-%d'):
+    last_valid_date = row[1]
+    if last_valid_date == datetime.today().strftime('%Y-%m-%d'):
         print(f"Stock data for {ticker} already up to date")
         return True
 
-    next_day = get_next_day(last_date)
-    print(f"Updating {ticker} from {next_day}")
-    data = fetch_stock_data(ticker=ticker,interval=interval, start_date=next_day)
+    # Yahoo may correct a previously downloaded session later. Revisit recent rows
+    # instead of starting after the newest row, which would preserve bad candles.
+    refresh_start = (
+        datetime.strptime(last_date, "%Y-%m-%d") - timedelta(days=REFRESH_LOOKBACK_DAYS)
+    ).strftime("%Y-%m-%d")
+    print(f"Updating {ticker} from {refresh_start}")
+    data = fetch_stock_data(ticker=ticker,interval=interval, start_date=refresh_start)
 
     if data.empty:
         print(f"No new data for {ticker}")
-        return True
+        return last_valid_date is not None
 
     save_stock_data(data)
     print(f"Saved {len(data)} records for {ticker}")

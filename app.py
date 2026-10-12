@@ -1,4 +1,5 @@
 from math import isfinite
+from os import getenv
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from services.db import create_tables, get_stock_data, get_latest_stock_summary, get_recent_stock_prices
 from services.data_updater import ensure_stock_data
@@ -6,11 +7,23 @@ from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
 from services.technical_indicator_service import get_latest_indicators, calculate_all_indicators
 from services.ml.model_service import train_and_predict
+from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold
+from services.ml.global_forest_service import (
+    predict_latest_with_global_model,
+    simulate_global_walk_forward,
+    simulate_with_global_model,
+    validate_simulation_dates,
+)
+from services.ml.global_training_service import GlobalTrainingJobs
+from services.ml.model_store_service import GLOBAL_MODEL_DIR, get_active_global_model, list_global_models
 import re
 
 
 
 app = Flask(__name__)
+app.config["GLOBAL_MODEL_DIR"] = GLOBAL_MODEL_DIR
+app.config["GLOBAL_MODEL_ID"] = getenv("GLOBAL_MODEL_ID") or None
+global_training_jobs = GlobalTrainingJobs()
 
 FEATURED_STOCKS = (
     {"ticker": "AAPL", "name": "Apple"},
@@ -227,6 +240,9 @@ def stock_prediction_api(ticker):
             0.001,
             "Fee rate"
         )
+        confidence_threshold = validate_confidence_threshold(
+            request.args.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+        )
     except ValueError as error:
         return jsonify({
             "error": str(error)}), 400
@@ -249,12 +265,141 @@ def stock_prediction_api(ticker):
         return jsonify({"error": f"No data found for ticker {ticker}"}), 404
 
     try:
-        predictions = train_and_predict(df, start_date, end_date, initial_cash, fee_rate)
+        predictions = train_and_predict(
+            df, start_date, end_date, initial_cash, fee_rate,
+            confidence_threshold=confidence_threshold,
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
     return jsonify(predictions)
 
+
+
+@app.route("/api/models/global")
+def global_models_api():
+    return jsonify({
+        "models": list_global_models(app.config["GLOBAL_MODEL_DIR"]),
+        "training": global_training_jobs.snapshot(),
+    })
+
+
+@app.route("/api/models/global/active")
+def active_global_model_api():
+    try:
+        metadata = get_active_global_model(
+            app.config["GLOBAL_MODEL_DIR"], app.config["GLOBAL_MODEL_ID"],
+        )
+    except FileNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify({"model": metadata})
+
+
+@app.route("/api/models/global/train", methods=["POST"])
+def train_global_model_api():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Podaj datę graniczną uczenia."}), 400
+    try:
+        job = global_training_jobs.start(
+            payload.get("training_cutoff"), app.config["GLOBAL_MODEL_DIR"],
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 409
+    return jsonify(job), 202
+
+
+@app.route("/api/stock/<ticker>/global-simulation", methods=["POST"])
+def global_simulation_api(ticker):
+    ticker = ticker.upper()
+    if not is_valid_ticker_format(ticker):
+        return jsonify({"error": "Nieprawidłowy symbol spółki."}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Podaj parametry symulacji."}), 400
+    try:
+        initial_cash = parse_float_parameter(payload.get("initial_cash"), 10000, "Kapitał")
+        fee_rate = parse_float_parameter(payload.get("fee_rate"), 0.001, "Prowizja")
+        confidence_threshold = validate_confidence_threshold(
+            payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+        )
+        if not isfinite(initial_cash) or initial_cash <= 0:
+            raise ValueError("Kapitał musi być skończoną liczbą większą od zera.")
+        if not isfinite(fee_rate) or fee_rate < 0:
+            raise ValueError("Prowizja musi być skończoną liczbą nieujemną.")
+        if not ensure_stock_data(ticker, "1d"):
+            return jsonify({"error": f"Brak danych spółki {ticker}."}), 404
+        data = get_stock_data(ticker, "1d", None)
+        if data.empty:
+            return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
+        result = simulate_with_global_model(
+            data, payload.get("model_id"), payload.get("start_date"), payload.get("end_date"),
+            initial_cash, fee_rate, app.config["GLOBAL_MODEL_DIR"],
+            confidence_threshold=confidence_threshold,
+        )
+    except FileNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(result)
+
+
+@app.route("/api/stock/<ticker>/global-walk-forward", methods=["POST"])
+def global_walk_forward_api(ticker):
+    ticker = ticker.upper()
+    if not is_valid_ticker_format(ticker):
+        return jsonify({"error": "Nieprawidłowy symbol spółki."}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Podaj parametry symulacji."}), 400
+    try:
+        start_date = payload.get("start_date")
+        end_date = payload.get("end_date")
+        validate_simulation_dates(start_date, end_date)
+        confidence_threshold = validate_confidence_threshold(
+            payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+        )
+        initial_cash = parse_float_parameter(payload.get("initial_cash"), 10000, "Kapitał")
+        fee_rate = parse_float_parameter(payload.get("fee_rate"), 0.001, "Prowizja")
+        if not isfinite(initial_cash) or initial_cash <= 0:
+            raise ValueError("Kapitał musi być skończoną liczbą większą od zera.")
+        if not isfinite(fee_rate) or fee_rate < 0:
+            raise ValueError("Prowizja musi być skończoną liczbą nieujemną.")
+        if not ensure_stock_data(ticker, "1d"):
+            return jsonify({"error": f"Brak danych spółki {ticker}."}), 404
+        data = get_stock_data(ticker, "1d", None)
+        if data.empty:
+            return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
+        result = simulate_global_walk_forward(
+            data, ticker, start_date, end_date, initial_cash, fee_rate,
+            confidence_threshold=confidence_threshold,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(result)
+
+
+@app.route("/api/stock/<ticker>/global-prediction")
+def latest_global_prediction_api(ticker):
+    ticker = ticker.upper()
+    if not is_valid_ticker_format(ticker):
+        return jsonify({"error": "Nieprawidłowy symbol spółki."}), 400
+    if not ensure_stock_data(ticker, "1d"):
+        return jsonify({"error": f"Brak danych spółki {ticker}."}), 404
+    data = get_stock_data(ticker, "1d", None)
+    if data.empty:
+        return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
+    try:
+        result = predict_latest_with_global_model(
+            data, request.args.get("model_id"), app.config["GLOBAL_MODEL_DIR"],
+        )
+    except FileNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(result)
 
 
 if __name__ == "__main__":

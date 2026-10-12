@@ -49,12 +49,16 @@ def test_run_backtest_buys_then_sells_with_profit():
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 110,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-02"
         },
         {
             "prediction": 0,
             "next_date": "2026-01-02",
             "next_open": 120,
             "next_close": 120,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-03"
         },
     ]
 
@@ -85,12 +89,16 @@ def test_run_backtest_counts_losing_trade():
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 100,
+            "target_end_open": 80,
+            "target_end_date": "2026-01-02"
         },
         {
             "prediction": 0,
             "next_date": "2026-01-02",
             "next_open": 80,
             "next_close": 80,
+            "target_end_open": 80,
+            "target_end_date": "2026-01-03"
         },
     ]
     result = run_backtest(predictions=predictions,initial_cash=10000,fee_rate=0,)

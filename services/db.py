@@ -2,6 +2,7 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import psycopg
+from services.stock_data_quality_service import VALID_OHLC_SQL, filter_valid_ohlc
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -40,6 +41,9 @@ def create_tables():
     conn.close()
 
 def save_stock_data(data):
+    data = filter_valid_ohlc(data)
+    if data.empty:
+        return
     conn = get_connection()
     cur = conn.cursor()
 
@@ -90,10 +94,11 @@ def get_recent_stock_prices(ticker, interval="1d", limit=7):
     conn = get_connection()
     ticker = ticker.upper()
 
-    query = """
+    query = f"""
         SELECT date, close
         FROM stock_prices
         WHERE ticker = %s AND interval = %s
+          AND ({VALID_OHLC_SQL})
         ORDER BY date DESC
         LIMIT %s
     """
@@ -136,10 +141,11 @@ def get_latest_stock_summary(ticker, interval="1d"):
 
     ticker = ticker.upper()
 
-    query = """
+    query = f"""
         SELECT date, close, volume
         FROM stock_prices
         WHERE ticker = %s AND interval = %s
+          AND ({VALID_OHLC_SQL})
         ORDER BY date DESC
         LIMIT 2
     """

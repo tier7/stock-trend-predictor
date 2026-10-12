@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+from services.stock_data_quality_service import filter_valid_ohlc
 
 def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
     print("FETCH PARAMS:")
@@ -10,15 +11,15 @@ def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
 
     try:
         if start_date is None:
-            data = yf.download(ticker, period=period, interval=interval, multi_level_index=False, actions=True,progress=False)
+            data = yf.download(ticker, period=period, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True)
         else:
-            data = yf.download(ticker, start=start_date, interval=interval, multi_level_index=False, actions=True,progress=False)
+            data = yf.download(ticker, start=start_date, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True)
 
     except Exception as error:
         print(f"Error while downloading data: {ticker}: {error}")
         return pd.DataFrame()
 
-    if data.empty:
+    if data is None or data.empty:
         print(F"No data found for {ticker}")
         return pd.DataFrame()
 
@@ -40,7 +41,10 @@ def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
 
     data = data[["ticker", "interval", "date", "open", "high", "low", "close", "volume", "dividends", "stock_splits"]]
     data["date"] = data["date"].dt.strftime("%Y-%m-%d")
-    return data
+    valid_data = filter_valid_ohlc(data)
+    if len(valid_data) != len(data):
+        print(f"Skipped {len(data) - len(valid_data)} invalid OHLC rows for {ticker}.")
+    return valid_data
 
 
 def fetch_company_name(ticker):

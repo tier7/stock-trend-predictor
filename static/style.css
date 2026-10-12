@@ -439,19 +439,45 @@ button {
     font-weight: 700;
 }
 
-.range-input-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 110px;
-    gap: 10px;
+.confidence-heading {
+    display: flex;
     align-items: center;
+    justify-content: space-between;
 }
 
-.range-input-row input[type="range"] {
+.confidence-heading output {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.confidence-parameter input[type="range"] {
     width: 100%;
+    margin: 3px 0;
     accent-color: #ffffff;
+    cursor: pointer;
 }
 
-.range-number {
+.confidence-parameter input[type="range"]:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 4px;
+    border-radius: 4px;
+}
+
+.confidence-parameter input[type="range"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.62;
+}
+
+.confidence-description {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.simulator-number {
     width: 100%;
     height: 38px;
     padding: 0 9px;
@@ -462,7 +488,7 @@ button {
     font-variant-numeric: tabular-nums;
 }
 
-.range-number:focus {
+.simulator-number:focus {
     border-color: #ffffff;
     outline: none;
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
@@ -482,7 +508,8 @@ button {
     font-weight: 700;
 }
 
-.prediction-date-row input {
+.prediction-date-row input,
+.prediction-date-row select {
     width: 100%;
     min-width: 0;
     height: 38px;
@@ -494,7 +521,8 @@ button {
     border-radius: 6px;
 }
 
-.prediction-date-row input:focus {
+.prediction-date-row input:focus,
+.prediction-date-row select:focus {
     border-color: #ffffff;
     outline: none;
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
@@ -523,7 +551,7 @@ button {
 }
 
 .simulator-run-button:disabled {
-    cursor: wait;
+    cursor: not-allowed;
     opacity: 0.62;
 }
 
@@ -532,6 +560,13 @@ button {
     color: #dce3ec;
     font-size: 13px;
     line-height: 1.45;
+}
+
+.model-mode-note {
+    margin: 9px 0 14px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
 }
 
 .backtest-card {

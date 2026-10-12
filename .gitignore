@@ -205,6 +205,7 @@ tempCodeRunnerFile.py
 
 # Local project data
 services/stocks.db
+/models/global_forest/
 
 # Ruff stuff:
 .ruff_cache/

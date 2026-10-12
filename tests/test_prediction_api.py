@@ -100,12 +100,13 @@ def test_prediction_endpoint_returns_model_result(client, monkeypatch, available
     received_arguments = {}
 
 
-    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate):
+    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate, *, confidence_threshold=0.6):
         received_arguments["data"] = data
         received_arguments["start_date"] = start_date
         received_arguments["end_date"] = end_date
         received_arguments["initial_cash"] = initial_cash
         received_arguments["fee_rate"] = fee_rate
+        received_arguments["confidence_threshold"] = confidence_threshold
         return expected_result
 
     monkeypatch.setattr(app_module,"train_and_predict",fake_train_and_predict)
@@ -116,6 +117,7 @@ def test_prediction_endpoint_returns_model_result(client, monkeypatch, available
             "end_date": "2026-06-01",
             "initial_cash": "25000",
             "fee_rate": "0.0025",
+            "confidence_threshold": "0.75",
         }
     )
 
@@ -127,11 +129,12 @@ def test_prediction_endpoint_returns_model_result(client, monkeypatch, available
     assert received_arguments["end_date"] == "2026-06-01"
     assert received_arguments["initial_cash"] == pytest.approx(25000)
     assert received_arguments["fee_rate"] == pytest.approx(0.0025)
+    assert received_arguments["confidence_threshold"] == pytest.approx(0.75)
 
 def test_prediction_endpoint_returns_400_for_model_validation_error(client,monkeypatch,available_stock_data):
 
 
-    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate):
+    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate, *, confidence_threshold=0.6):
         raise ValueError("End date must be later than start date.")
 
     monkeypatch.setattr(app_module,"train_and_predict",fake_train_and_predict)
@@ -152,9 +155,10 @@ def test_prediction_endpoint_returns_400_for_model_validation_error(client,monke
 def test_prediction_endpoint_uses_default_backtest_parameters(client,monkeypatch,available_stock_data):
     received_arguments = {}
 
-    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate):
+    def fake_train_and_predict(data,start_date,end_date,initial_cash,fee_rate, *, confidence_threshold=0.6):
         received_arguments["initial_cash"] = initial_cash
         received_arguments["fee_rate"] = fee_rate
+        received_arguments["confidence_threshold"] = confidence_threshold
         return {"predictions": []}
 
     monkeypatch.setattr(
@@ -174,6 +178,7 @@ def test_prediction_endpoint_uses_default_backtest_parameters(client,monkeypatch
     assert response.status_code == 200
     assert received_arguments["initial_cash"] == 10000
     assert received_arguments["fee_rate"] == 0.001
+    assert received_arguments["confidence_threshold"] == 0.6
 
 def test_prediction_endpoint_rejects_negative_initial_cash(client,monkeypatch):
 
@@ -236,7 +241,8 @@ def test_prediction_endpoint_accepts_zero_fee_rate(client,monkeypatch, available
         start_date,
         end_date,
         initial_cash,
-        fee_rate
+        fee_rate,
+        *, confidence_threshold=0.6,
     ):
         received_arguments["fee_rate"] = fee_rate
         return {"predictions": []}

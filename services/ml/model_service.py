@@ -1,91 +1,107 @@
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score,confusion_matrix,precision_score,recall_score,f1_score
+import pandas as pd
+from sklearn.metrics import accuracy_score
+
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset
-from services.simulator_service import run_buy_and_hold, run_backtest
+from services.ml.walk_forward_service import (
+    RETRAIN_INTERVAL,
+    build_date_blocks,
+    evaluate,
+    split_dataset_by_date,
+    train,
+)
+from services.simulator_service import (
+    DEFAULT_CONFIDENCE_THRESHOLD, run_buy_and_hold, run_backtest, validate_confidence_threshold,
+)
 
 
-RETRAIN_INTERVAL = 20
-
-def split_dataset_by_date(data, start_date, end_date):
-    train_df = data[data["date"] < start_date]
-    test_df = data[
-        (data["date"] >= start_date)
-        & (data["next_date"] <= end_date)
-    ]
-    return train_df, test_df
-
-def train_and_predict(data, start_date, end_date, initial_cash, fee_rate):
+def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_blocks=None,
+                      *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+    """Train per date block; pass the experiment's blocks to share its schedule."""
+    confidence_threshold = validate_confidence_threshold(confidence_threshold)
     if start_date >= end_date:
         raise ValueError("End date must be later than start date.")
 
     df = prepare_dataset(data)
-    train_df, test_df = split_dataset_by_date(df, start_date, end_date)
-    if len(train_df) < 100:
+    train_period_df, test_df = split_dataset_by_date(df, start_date, end_date)
+    if len(train_period_df) < 100:
         raise ValueError("Not enough training data before selected date. Choose a later date.")
 
-    if len(test_df) < 1:
+    if test_df.empty:
         raise ValueError("No test data from selected date. Choose an earlier date.")
 
-    predictions = []
-    probabilities_up = []
-    baseline_predictions = []
-    for test_position, row_data in enumerate(test_df.iterrows()):
-        row_index, test_row = row_data
-        if test_position % RETRAIN_INTERVAL == 0:
-            current_train_df = df[df["date"] < test_row["date"]]
-            x_train = current_train_df[FEATURE_COLUMNS]
-            y_train = current_train_df["target"]
-            baseline_prediction = int(y_train.mode().iloc[0])
-            model = RandomForestClassifier(n_estimators=100,random_state=26)
-            model.fit(x_train, y_train)
-        current_features = test_row[FEATURE_COLUMNS].to_frame().T.astype(float)
-        baseline_predictions.append(baseline_prediction)
-        prediction = model.predict(current_features)[0]
-        probability_up = model.predict_proba(current_features)[0][1]
-        predictions.append(prediction)
-        probabilities_up.append(probability_up)
+    if date_blocks is None:
+        date_blocks = build_date_blocks(test_df, RETRAIN_INTERVAL)
 
-    y_test = test_df["target"]
+    if not date_blocks or any(not block_dates for block_dates in date_blocks):
+        raise ValueError("Date blocks must contain non-empty blocks.")
 
-    acc = accuracy_score(y_test, predictions)
-    baseline_acc = accuracy_score(y_test, baseline_predictions)
+    scheduled_dates = [date for block_dates in date_blocks for date in block_dates]
+    if scheduled_dates != sorted(set(scheduled_dates)):
+        raise ValueError("Date blocks must contain unique dates in chronological order.")
+    if not test_df["date"].isin(scheduled_dates).all():
+        raise ValueError("Date blocks do not cover all test dates.")
 
-    tn, fp, fn, tp = confusion_matrix(y_test,predictions,labels=[0, 1]).ravel()
-    precision = precision_score(y_test, predictions, zero_division=0)
-    recall = recall_score(y_test, predictions, zero_division=0)
-    f1 = f1_score(y_test, predictions, zero_division=0)
+    prediction_blocks = []
+    for block_dates in date_blocks:
+        training_date = block_dates[0]
+        current_train_df = df[
+            (df["date"] < training_date)
+            & (df["target_end_date"] <= training_date)
+        ]
+        current_test_df = test_df[test_df["date"].isin(block_dates)].copy()
+        if current_test_df.empty:
+            continue
 
-    result_df = test_df[["date", "close", "next_date", "next_open", "next_close", "target"]].copy()
-    result_df["prediction"] = predictions
-    result_df["probability_up"] = probabilities_up
+        model = train(current_train_df, FEATURE_COLUMNS)
+        current_test_df["prediction"] = model.predict(current_test_df[FEATURE_COLUMNS])
+        current_test_df["probability_up"] = model.predict_proba(
+            current_test_df[FEATURE_COLUMNS]
+        )[:, 1]
+        current_test_df["baseline_prediction"] = int(current_train_df["target"].mode().iloc[0])
+        prediction_blocks.append(current_test_df)
+
+    results_df = pd.concat(prediction_blocks, ignore_index=True).sort_values("date")
+    return build_backtest_result(
+        results_df, start_date, end_date, initial_cash, fee_rate, len(train_period_df),
+        confidence_threshold=confidence_threshold,
+    )
+
+
+def build_backtest_result(results_df, start_date, end_date, initial_cash, fee_rate, training_rows,
+                          confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+    """Use stored predictions to build the response consumed by the simulator GUI."""
+    results_df = results_df.sort_values("date")
+    model_eval = evaluate(results_df)
+    baseline_acc = accuracy_score(results_df["target"], results_df["baseline_prediction"])
+
+    result_df = results_df[
+        ["date", "close", "next_date", "next_open", "next_close", "target_end_date",
+         "target_end_open", "target", "prediction", "probability_up"]
+    ].copy()
     result_df["is_correct"] = result_df["prediction"] == result_df["target"]
     result_df["date"] = result_df["date"].astype(str)
+    result_df["target_end_date"] = result_df["target_end_date"].astype(str)
     result_df["next_date"] = result_df["next_date"].astype(str)
     prediction_records = result_df.to_dict(orient="records")
 
-    modelsim = run_backtest(prediction_records, initial_cash, fee_rate)
+    modelsim = run_backtest(prediction_records, initial_cash, fee_rate, confidence_threshold)
     bahsim = run_buy_and_hold(prediction_records,initial_cash,fee_rate)
 
     return {
-        "accuracy": float(acc),
+        "accuracy": float(model_eval["accuracy"]),
         "requested_start_date": start_date,
         "requested_end_date": end_date,
         "effective_test_start_date": str(result_df["date"].iloc[0]),
-        "effective_test_end_date": str(result_df["next_date"].iloc[-1]),
-        "training_rows": int(len(train_df)),
+        "effective_test_end_date": str(result_df["target_end_date"].iloc[-1]),
+        "training_rows": int(training_rows),
         "total_predictions": int(len(result_df)),
         "correct_predictions": int(result_df["is_correct"].sum()),
         "predictions": prediction_records,
         "baseline_accuracy": float(baseline_acc),
-        "confusion_matrix": {
-            "true_negative": int(tn),
-            "false_positive": int(fp),
-            "false_negative": int(fn),
-            "true_positive": int(tp),
-        },
-        "precision": float(precision),
-        "recall": float(recall),
-        "f1": float(f1),
+        "confusion_matrix": model_eval["confusion_matrix"],
+        "precision": float(model_eval["precision"]),
+        "recall": float(model_eval["recall"]),
+        "f1": float(model_eval["f1"]),
         "model_summary": modelsim,
         "buyandhold_summary": bahsim,
 
