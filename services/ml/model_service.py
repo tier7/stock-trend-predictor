@@ -14,9 +14,7 @@ from services.simulator_service import (
 )
 
 
-def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_blocks=None,
-                      *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
-    """Train per date block; pass the experiment's blocks to share its schedule."""
+def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_blocks=None, *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
     if start_date >= end_date:
         raise ValueError("End date must be later than start date.")
@@ -67,9 +65,7 @@ def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_b
     )
 
 
-def build_backtest_result(results_df, start_date, end_date, initial_cash, fee_rate, training_rows,
-                          confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
-    """Use stored predictions to build the response consumed by the simulator GUI."""
+def build_backtest_result(results_df, start_date, end_date, initial_cash, fee_rate, training_rows,confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
     results_df = results_df.sort_values("date")
     model_eval = evaluate(results_df)
     baseline_acc = accuracy_score(results_df["target"], results_df["baseline_prediction"])
