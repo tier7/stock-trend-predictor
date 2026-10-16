@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 from uuid import uuid4
+import torch
 
 import joblib
 
@@ -11,6 +12,7 @@ from services.ml.dataset_service import FEATURE_COLUMNS
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
 MODEL_ID_PATTERN = re.compile(r"global_forest_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
+TORCH_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "neural_networks")
 
 
 def model_path(model_id, model_dir=None):
@@ -93,3 +95,25 @@ def load_global_model(model_id, model_dir=None):
     except Exception as error:
         raise ValueError("Nie można wczytać modelu. Wytrenuj nową wersję.") from error
     return model, metadata
+
+
+def save_torch_model(model, scaler, metadata, model_dir=None):
+    metadata = dict(metadata)
+    metadata["model_id"] = (
+        f"{metadata['architecture']}_"
+        f"{metadata['training_cutoff']}_"
+        f"{uuid4().hex[:8]}"
+    )
+
+    directory = (Path(model_dir or TORCH_MODEL_DIR) / metadata["model_id"])
+    directory.mkdir(parents=True, exist_ok=True)
+
+    torch.save(model.state_dict(), directory / "weights.pt")
+    joblib.dump(scaler, directory / "scaler.joblib")
+    metadata_path = directory / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return metadata

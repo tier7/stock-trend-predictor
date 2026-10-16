@@ -15,8 +15,7 @@ tickers = ["AMD", "GOOGL"]
 model_types = ["global", "local"]
 
 if __name__ == "__main__":
-    #rows = run_experiments(tickers, model_types, periods, global_model_id="global_forest_2026-01-01_71b3dcc8")
-    #report = pd.DataFrame(rows)
+    rows = run_experiments(tickers, model_types, periods, global_model_id="global_forest_2026-01-01_71b3dcc8")
     report = pd.read_csv(output_path)
     print(report)
     summary = summarize_results(report)
