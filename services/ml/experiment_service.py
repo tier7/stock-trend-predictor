@@ -4,6 +4,7 @@ from services.ml.global_forest_service import simulate_with_global_model
 from services.ml.model_service import train_and_predict
 from services.ml.model_store_service import get_active_global_model
 import pandas as pd
+from services.ml.mlp_service import simulate_with_mlp_model
 
 def build_result_row(ticker, model_type, result):
     return {
@@ -23,7 +24,7 @@ def build_result_row(ticker, model_type, result):
         "transactions": result["model_summary"]["total_transactions"],
     }
 
-def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=0.6):
+def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=0.6, *, torch_model_id=None):
     data = get_stock_data(ticker,years=None)
     if data.empty:
         raise ValueError("No data")
@@ -50,16 +51,29 @@ def run_simulation(ticker, model_type, start_date, end_date, global_model_id=Non
             fee_rate=fee_rate,
             confidence_threshold=confidence_threshold,
         )
+    elif model_type == "mlp":
+        if torch_model_id is None:
+            raise ValueError("torch_model_id is required for MLP")
+
+        result = simulate_with_mlp_model(
+            data,
+            model_id=torch_model_id,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            fee_rate=fee_rate,
+            confidence_threshold=confidence_threshold,
+        )
     else:
-        raise ValueError("model_type must be either 'global' or 'local'")
+        raise ValueError("model_type must be either 'global', 'local' or 'mlp'")
 
     row = build_result_row(ticker, model_type, result)
-    row["model_id"] = global_model_id if model_type == "global" else None
+    row["model_id"] = result.get("model_metadata", {}).get("model_id")
     row["initial_cash"] = initial_cash
     row["fee_rate"] = fee_rate
     return row
 
-def run_experiments(tickers, model_types, periods, global_model_id=None, initial_cash=10000, fee_rate = 0.001, confidence_threshold=0.6):
+def run_experiments(tickers,model_types,periods,global_model_id=None,initial_cash=10000,fee_rate=0.001,confidence_threshold=0.6,*,torch_model_id=None,):
     rows = []
     if "global" in model_types and global_model_id is None:
         metadata = get_active_global_model()
@@ -68,7 +82,17 @@ def run_experiments(tickers, model_types, periods, global_model_id=None, initial
     for period in periods:
         for ticker in tickers:
             for model_type in model_types:
-                row = run_simulation(ticker, model_type, period["start_date"], period["end_date"], global_model_id, initial_cash, fee_rate, confidence_threshold)
+                row = run_simulation(
+                    ticker,
+                    model_type,
+                    period["start_date"],
+                    period["end_date"],
+                    global_model_id=global_model_id,
+                    initial_cash=initial_cash,
+                    fee_rate=fee_rate,
+                    confidence_threshold=confidence_threshold,
+                    torch_model_id=torch_model_id,
+                )
                 row["period"] = period["name"]
                 rows.append(row)
 

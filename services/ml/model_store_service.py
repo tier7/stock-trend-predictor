@@ -117,3 +117,23 @@ def save_torch_model(model, scaler, metadata, model_dir=None):
     )
 
     return metadata
+
+def load_torch_model(model, model_id, model_dir=None):
+    directory = Path(model_dir or TORCH_MODEL_DIR) / model_id
+    metadata_path = directory / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    if metadata["feature_columns"] != FEATURE_COLUMNS:
+        raise ValueError("Incompatible feature columns")
+    if metadata["model_id"] != model_id:
+        raise ValueError("Incompatible model ID")
+    state_dict = torch.load(
+        directory / "weights.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+
+    model.load_state_dict(state_dict)
+    scaler = joblib.load(directory / "scaler.joblib")
+    model.eval()
+    return model, scaler, metadata

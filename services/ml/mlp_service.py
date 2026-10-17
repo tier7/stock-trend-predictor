@@ -3,11 +3,19 @@ from copy import deepcopy
 
 from sklearn.metrics import log_loss, accuracy_score
 
-from services.ml.global_forest_service import connect_data
+from services.ml.global_forest_service import connect_data, validate_simulation_dates
 from services.ml.walk_forward_service import split_dataset_by_date
 from sklearn.preprocessing import StandardScaler
 import torch
 from torch.utils.data import TensorDataset, DataLoader
+from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset
+from services.ml.mlp_model import NeuralNetwork
+from services.ml.model_store_service import load_torch_model
+from services.ml.model_service import build_backtest_result
+from services.simulator_service import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    validate_confidence_threshold,
+)
 
 def prepare_training_data(tickers, validation_start, training_cutoff):
     if training_cutoff <= validation_start:
@@ -160,3 +168,30 @@ def evaluate_model(model, data, feature_columns, scaler):
     "predictions": predictions,
     "probabilities": probabilities,
 }
+
+
+def simulate_with_mlp_model(data, model_id, start_date, end_date, initial_cash, fee_rate,*, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+    validate_simulation_dates(start_date, end_date)
+    confidence_threshold = validate_confidence_threshold(confidence_threshold)
+    model = NeuralNetwork(input_size=len(FEATURE_COLUMNS))
+    model, scaler, metadata = load_torch_model(model, model_id)
+
+    if start_date < metadata["training_cutoff"]:
+        raise ValueError("start_date must be greater than or equal to training_cutoff")
+
+    prepared = prepare_dataset(data)
+    _, test_df = split_dataset_by_date(prepared, start_date, end_date)
+
+    if test_df.empty:
+        raise ValueError("test_df is empty")
+    test_df = test_df.copy()
+
+    test_df["probability_up"] = predict_probabilities(model, test_df, FEATURE_COLUMNS, scaler)
+    test_df["prediction"] = (test_df["probability_up"] >= 0.5).astype(int)
+    test_df["baseline_prediction"] = metadata["baseline_prediction"]
+
+    result = build_backtest_result(test_df, start_date, end_date, initial_cash, fee_rate,metadata["training_rows"],confidence_threshold=confidence_threshold)
+    result["model_type"] = "mlp"
+    result["model_metadata"] = metadata
+    return result
+

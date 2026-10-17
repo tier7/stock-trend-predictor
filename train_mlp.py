@@ -57,6 +57,7 @@ if __name__ == "__main__":
         "epochs": best_epoch,
         "selection_history": history,
         "final_history": final_history,
+        "baseline_prediction": int(final_train_df["target"].mode().iloc[0]),
     }
 
     saved_metadata = save_torch_model(
