@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import psycopg
 from services.stock_data_quality_service import VALID_OHLC_SQL, filter_valid_ohlc
+from psycopg.rows import dict_row
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -35,6 +36,38 @@ def create_tables():
     cur.execute('''CREATE TABLE IF NOT EXISTS companies (
     ticker TEXT PRIMARY KEY,
     name TEXT NOT NULL)
+    ''')
+
+    cur.execute('''CREATE TABLE IF NOT EXISTS news_articles (
+    article_id BIGINT NOT NULL,
+    headline TEXT NOT NULL,
+    symbols TEXT[],
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    PRIMARY KEY (article_id, updated_at)
+    )
+    ''')
+
+
+    cur.execute('''CREATE TABLE IF NOT EXISTS news_sentiments (
+    article_id BIGINT NOT NULL,
+    article_updated_at TIMESTAMPTZ NOT NULL,
+    model_name TEXT NOT NULL,
+    model_revision TEXT NOT NULL,
+    positive_probability DOUBLE PRECISION NOT NULL,
+    negative_probability DOUBLE PRECISION NOT NULL,
+    neutral_probability DOUBLE PRECISION NOT NULL,
+    analyzed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    PRIMARY KEY (
+        article_id, article_updated_at, model_name, model_revision
+    ),
+
+    FOREIGN KEY (article_id, article_updated_at)
+        REFERENCES news_articles (article_id, updated_at)
+    )
     ''')
 
     conn.commit()
@@ -182,6 +215,119 @@ def get_latest_stock_summary(ticker, interval="1d"):
         "price_change": price_change,
         "price_change_percent": price_change_percent,
     }
+
+def save_news(articles):
+    if len(articles) <= 0:
+        return 0
+    conn = get_connection()
+    cur = conn.cursor()
+
+    rows = []
+    for article in articles:
+        row = (
+            article["id"],
+            article["headline"],
+            article.get("symbols") or [],
+            article["created_at"],
+            article["updated_at"],
+        )
+        rows.append(row)
+
+    cur.executemany("""INSERT INTO news_articles (article_id, headline, symbols, created_at, updated_at)
+    VALUES (%s, %s, %s, %s, %s)
+    ON CONFLICT (article_id, updated_at) DO NOTHING""", rows)
+    inserted_count = cur.rowcount
+    conn.commit()
+    conn.close()
+
+    return inserted_count
+
+def get_news(ticker):
+    conn = get_connection()
+    cur = conn.cursor(row_factory=dict_row)
+
+    cur.execute(f"""SELECT article_id, headline, symbols, created_at, updated_at
+    FROM news_articles
+    WHERE %s = ANY(symbols)
+    ORDER BY created_at, article_id, updated_at""", (ticker.upper(),))
+
+    articles = cur.fetchall()
+
+    conn.close()
+
+    return articles
+
+
+def save_sentiment(results, model_name, model_revision):
+    if len(results) <= 0:
+        return 0
+    conn = get_connection()
+    cur = conn.cursor()
+
+    rows = []
+    for result in results:
+        row = (
+            result["article_id"],
+            result["updated_at"],
+            model_name,
+            model_revision,
+            result["sentiment"]["positive"],
+            result["sentiment"]["negative"],
+            result["sentiment"]["neutral"],
+        )
+        rows.append(row)
+
+    cur.executemany("""INSERT INTO news_sentiments (article_id, article_updated_at, model_name, model_revision, positive_probability, negative_probability, neutral_probability)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (article_id, article_updated_at, model_name, model_revision) DO NOTHING""", rows)
+    inserted_count = cur.rowcount
+    conn.commit()
+    conn.close()
+
+    return inserted_count
+
+def get_news_without_sentiment(ticker, model_name, model_revision):
+    conn = get_connection()
+    cur = conn.cursor(row_factory=dict_row)
+    cur.execute(f"""
+    SELECT n.article_id, n.headline, n.symbols, n.created_at, n.updated_at
+    FROM news_articles AS n
+    WHERE %s = ANY(n.symbols)
+    AND NOT EXISTS (
+    SELECT 1
+    FROM news_sentiments AS s
+    WHERE s.article_id = n.article_id
+    AND s.article_updated_at = n.updated_at
+    AND s.model_name = %s
+    AND s.model_revision = %s
+    )
+    ORDER BY n.created_at, n.article_id, n.updated_at  
+    """, (ticker.upper(), model_name, model_revision))
+
+    articles = cur.fetchall()
+
+    conn.close()
+
+    return articles
+
+def get_news_with_sentiment(ticker, model_name, model_revision):
+    conn = get_connection()
+    cur = conn.cursor(row_factory=dict_row)
+    cur.execute("""SELECT
+    n.article_id, n.headline, n.symbols, n.created_at, n.updated_at,
+    s.positive_probability, s.negative_probability, s.neutral_probability
+    FROM news_articles AS n
+    JOIN news_sentiments AS s
+    ON s.article_id = n.article_id
+    AND s.article_updated_at = n.updated_at
+    WHERE %s = ANY(n.symbols)
+    AND s.model_name = %s
+    AND s.model_revision = %s
+    ORDER BY n.created_at, n.article_id, n.updated_at""", (ticker.upper(), model_name, model_revision))
+
+    articles = cur.fetchall()
+    conn.close()
+    return articles
 
 if __name__ == "__main__":
     create_tables()
