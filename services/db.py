@@ -70,6 +70,18 @@ def create_tables():
     )
     ''')
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS news_imports (
+        ticker TEXT NOT NULL,
+        start_at TIMESTAMPTZ NOT NULL,
+        end_at TIMESTAMPTZ NOT NULL,
+        fetched_count INTEGER NOT NULL CHECK (fetched_count >= 0),
+        completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+        PRIMARY KEY (ticker, start_at, end_at),
+        CHECK (start_at < end_at)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -328,6 +340,31 @@ def get_news_with_sentiment(ticker, model_name, model_revision):
     articles = cur.fetchall()
     conn.close()
     return articles
+
+def is_news_imported(ticker, start_date, end_date):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""SELECT 1 FROM news_imports WHERE ticker = %s AND start_at = %s AND end_at = %s""", (ticker.upper(),start_date, end_date))
+
+    import_exists = cur.fetchone() is not None
+    conn.close()
+
+    return import_exists
+
+
+def save_news_import(ticker, start_date, end_date, fetched_count):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""INSERT INTO news_imports (ticker, start_at, end_at, fetched_count)
+    VALUES (%s, %s, %s, %s)
+    ON CONFLICT (ticker, start_at, end_at) DO NOTHING""", (ticker.upper(), start_date, end_date, fetched_count)
+    )
+
+    inserted_count = cur.rowcount
+    conn.commit()
+    conn.close()
+    return inserted_count
 
 if __name__ == "__main__":
     create_tables()

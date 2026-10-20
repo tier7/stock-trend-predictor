@@ -1,8 +1,13 @@
 import os
+
+import pandas as pd
 import requests
+from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
+from sympy.codegen.ast import Raise
+
 from services.ml.finbert_service import load_finbert, analyze_sentiment, MODEL_NAME, MODEL_REVISION
-from services.db import create_tables, save_news, get_news, save_sentiment, get_news_without_sentiment, get_news_with_sentiment
+from services.db import create_tables, save_news, get_news, save_sentiment, get_news_without_sentiment, get_news_with_sentiment, is_news_imported, save_news_import
 
 load_dotenv()
 
@@ -77,8 +82,62 @@ def classify_news_relevance(article, ticker):
             "reason": "multiple_tickers"
         }
 
+def import_news_range(ticker, start_date, end_date):
+    ticker = ticker.upper()
+    is_imported = is_news_imported(ticker, start_date, end_date)
+    if is_imported:
+        return {
+            "status": "skipped",
+            "fetched_count": None,
+            "inserted_count": 0
+        }
+    articles = fetch_all_news(ticker, start_date, end_date)
+    inserted_count = save_news(articles)
+    save_news_import(ticker, start_date, end_date, len(articles))
+    return {
+        "status": "completed",
+        "fetched_count": len(articles),
+        "inserted_count": inserted_count
+    }
+
+def build_month_blocks(start_date, end_date):
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+
+    if start >= end:
+        raise ValueError("Start date must be before end date")
+
+    ranges = []
+    current = start
+
+    while current < end:
+        next_month = (current+pd.offsets.MonthBegin(1)).normalize()
+        period_end = min(next_month, end)
+        ranges.append({
+            "start_date": current.isoformat(),
+            "end_date": period_end.isoformat(),
+        })
+
+        current = period_end
+    return ranges
+
 
 if __name__ == "__main__":
+    '''create_tables()
+    ticker = "AAPL"
+
+    ranges = build_month_blocks(
+        "2023-01-01T00:00:00Z",
+        "2023-04-01T00:00:00Z",
+    )
+
+    for period in ranges:
+        result = import_news_range(
+            ticker,
+            period["start_date"],
+            period["end_date"],
+        )
+        print(ticker, period["start_date"][:7], result)
     ticker = "AAPL"
     scored_articles = get_news_with_sentiment(
         ticker, MODEL_NAME, MODEL_REVISION
@@ -88,7 +147,8 @@ if __name__ == "__main__":
 
     if scored_articles:
         print(scored_articles[0])
-    '''ticker = "AAPL"
+    '''
+    ticker = "AAPL"
     articles = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
     results = []
     accepted_articles = []
@@ -100,8 +160,8 @@ if __name__ == "__main__":
     if not accepted_articles:
         print("No news to classify")
     else:
+        tokenizer, model = load_finbert()
         for article in accepted_articles:
-            tokenizer, model = load_finbert()
             sentiment = analyze_sentiment(article["headline"], tokenizer, model)
             results.append({
                 "article_id": article["article_id"],
@@ -112,6 +172,6 @@ if __name__ == "__main__":
             print(sentiment)
 
     inserted = save_sentiment(results, MODEL_NAME, MODEL_REVISION)
-    print("Zapisano ocen:", inserted)'''
+    print("Zapisano ocen:", inserted)
 
 
