@@ -178,7 +178,7 @@ def test_features_keep_latest_rows_and_match_training_representation(prices):
 def test_latest_rejects_missing_features_instead_of_using_older_session(tmp_path, prices, saved_model):
     incomplete = prices.copy()
     incomplete.loc[incomplete.index[-1], "close"] = np.nan
-    with pytest.raises(ValueError, match="Brak kompletnych cech"):
+    with pytest.raises(ValueError, match="No complete features"):
         global_service.predict_latest_with_global_model(incomplete, saved_model["model_id"], tmp_path)
 
 

@@ -108,6 +108,7 @@ def test_local_keeps_predictions_from_each_block_for_backtest(monkeypatch, share
     probabilities = iter([0.8, 0.2, 0.8])
 
     class FixedForest:
+        classes_ = np.array([0, 1])
         def __init__(self, probability_up):
             self.probability_up = probability_up
 

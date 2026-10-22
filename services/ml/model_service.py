@@ -6,6 +6,7 @@ from services.ml.walk_forward_service import (
     RETRAIN_INTERVAL,
     build_date_blocks,
     evaluate,
+    predict,
     split_dataset_by_date,
     train,
 )
@@ -51,10 +52,7 @@ def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_b
             continue
 
         model = train(current_train_df, FEATURE_COLUMNS)
-        current_test_df["prediction"] = model.predict(current_test_df[FEATURE_COLUMNS])
-        current_test_df["probability_up"] = model.predict_proba(
-            current_test_df[FEATURE_COLUMNS]
-        )[:, 1]
+        current_test_df = predict(model, current_test_df, FEATURE_COLUMNS)
         current_test_df["baseline_prediction"] = int(current_train_df["target"].mode().iloc[0])
         prediction_blocks.append(current_test_df)
 

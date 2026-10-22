@@ -46,6 +46,7 @@ def test_run_backtest_buys_then_sells_with_profit():
     predictions = [
         {
             "prediction": 1,
+            "probability_up": 1.0,
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 110,
@@ -54,6 +55,7 @@ def test_run_backtest_buys_then_sells_with_profit():
         },
         {
             "prediction": 0,
+            "probability_up": 0.0,
             "next_date": "2026-01-02",
             "next_open": 120,
             "next_close": 120,
@@ -86,6 +88,7 @@ def test_run_backtest_counts_losing_trade():
     predictions = [
         {
             "prediction": 1,
+            "probability_up": 1.0,
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 100,
@@ -94,6 +97,7 @@ def test_run_backtest_counts_losing_trade():
         },
         {
             "prediction": 0,
+            "probability_up": 0.0,
             "next_date": "2026-01-02",
             "next_open": 80,
             "next_close": 80,
@@ -112,15 +116,21 @@ def test_run_backtest_applies_transaction_fees():
     predictions = [
         {
             "prediction": 1,
+            "probability_up": 1.0,
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 110,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-02",
         },
         {
             "prediction": 0,
+            "probability_up": 0.0,
             "next_date": "2026-01-02",
             "next_open": 120,
             "next_close": 120,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-03",
         },
     ]
 
@@ -144,15 +154,21 @@ def test_run_backtest_with_open_position_at_end():
     predictions = [
         {
             "prediction": 1,
+            "probability_up": 1.0,
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 110,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-02",
         },
         {
             "prediction": 1,
+            "probability_up": 1.0,
             "next_date": "2026-01-02",
             "next_open": 120,
             "next_close": 125,
+            "target_end_open": 125,
+            "target_end_date": "2026-01-03",
         },
     ]
 
@@ -173,12 +189,16 @@ def test_run_buy_and_hold_returns_expected_profit():
             "next_date": "2026-01-01",
             "next_open": 100,
             "next_close": 110,
+            "target_end_open": 115,
+            "target_end_date": "2026-01-02",
         },
         {
             "prediction": 0,
             "next_date": "2026-01-02",
             "next_open": 115,
             "next_close": 120,
+            "target_end_open": 120,
+            "target_end_date": "2026-01-03",
         },
     ]
 
@@ -188,7 +208,8 @@ def test_run_buy_and_hold_returns_expected_profit():
     assert result["final_price"] == pytest.approx(120)
     assert result["final_value"] == pytest.approx(12000)
     assert result["total_return"] == pytest.approx(0.20)
-    assert len(result["equity_history"]) == 2
+    assert len(result["equity_history"]) == 3
+    assert result["equity_history"][0]["value"] == 10000
 
 def test_run_buy_and_hold_with_empty_predictions():
     predictions = []

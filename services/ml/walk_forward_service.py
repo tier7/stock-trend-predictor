@@ -1,10 +1,14 @@
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from services.ml.dataset_service import prepare_xy
+from services.ml.model_config import ModelConfig
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
+    mean_absolute_error,
+    root_mean_squared_error
 )
 
 
@@ -34,63 +38,89 @@ def build_date_blocks(test_df, retrain_interval):
     return blocks
 
 
-def train(train_df, feature_columns):
-    missing_features = []
-    if train_df.empty:
-        raise ValueError("Empty train dataframe")
+def train(train_df, feature_columns, config= None):
+    if config is None:
+        config = ModelConfig(
+            algorithm="random_forest",
+            task="classification",
+        )
 
-    for feature in feature_columns:
-        if feature not in train_df.columns:
-            missing_features.append(feature)
+    if config.algorithm != "random_forest":
+        raise ValueError("This function supports only random_forest")
 
-    if missing_features:
-        raise ValueError("The following features are missing: {}".format(missing_features))
+    x_train, y_train = prepare_xy(train_df, feature_columns, config)
 
-    if train_df[feature_columns].isna().any().any():
-        missing_mask = train_df[feature_columns].isna().any()
-        missing_columns = missing_mask.index[missing_mask].tolist()
-        raise ValueError("Missing values in columns: {}".format(missing_columns))
+    if config.task == "classification":
+        model = RandomForestClassifier(n_estimators=100, random_state=config.random_state)
+    elif config.task == "regression":
+        model = RandomForestRegressor(n_estimators=100, random_state=config.random_state)
 
-    if "target" not in train_df.columns:
-        raise ValueError("Target column is missing")
-
-    if not train_df["target"].isin([0, 1]).all():
-        raise ValueError("Not all target are 0 or 1.")
-
-    if train_df["target"].nunique() != 2:
-        raise ValueError("Training data must contain both target classes 0 and 1.")
-
-    x_train = train_df[feature_columns]
-    y_train = train_df["target"]
-    model = RandomForestClassifier(n_estimators=100, random_state=26)
     model.fit(x_train, y_train)
-
     return model
 
+def predict(model, data, feature_columns, config=None):
+    if config is None:
+        config = ModelConfig(
+            algorithm="random_forest",
+            task="classification",
+        )
 
-def evaluate(results_df):
+    x = data[feature_columns]
+    result = data.copy()
+
+    if config.task == "classification":
+        if not list(model.classes_) == [0, 1]:
+            raise ValueError("Invalid model classes")
+
+        result["prediction"] = model.predict(x)
+        result["probability_up"] = model.predict_proba(x)[:,1]
+
+    elif config.task == "regression":
+        result["predicted_return"] = model.predict(x)
+
+    return result
+
+def evaluate(results_df, config=None):
+    if config is None:
+        config = ModelConfig(
+            algorithm="random_forest",
+            task="classification",
+        )
+
     if results_df.empty:
         raise ValueError("Empty test dataframe")
 
-    y_test = results_df["target"]
-    predictions = results_df["prediction"]
+    y_test = results_df[config.target_column]
 
-    acc = accuracy_score(y_test, predictions)
-    tn, fp, fn, tp = confusion_matrix(y_test, predictions, labels=[0, 1]).ravel()
-    precision = precision_score(y_test, predictions, zero_division=0)
-    recall = recall_score(y_test, predictions, zero_division=0)
-    f1 = f1_score(y_test, predictions, zero_division=0)
-    return {
-        "predictions": predictions,
-        "probability_up": results_df["probability_up"],
-        "accuracy": acc,
-        "confusion_matrix": {
-            "true_negative": int(tn),
-            "false_positive": int(fp),
-            "false_negative": int(fn),
-            "true_positive": int(tp),
-        },
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    }
+
+    if config.task == "classification":
+        predictions = results_df["prediction"]
+        acc = accuracy_score(y_test, predictions)
+        tn, fp, fn, tp = confusion_matrix(y_test, predictions, labels=[0, 1]).ravel()
+        precision = precision_score(y_test, predictions, zero_division=0)
+        recall = recall_score(y_test, predictions, zero_division=0)
+        f1 = f1_score(y_test, predictions, zero_division=0)
+        return {
+            "predictions": predictions,
+            "probability_up": results_df["probability_up"],
+            "accuracy": acc,
+            "confusion_matrix": {
+                "true_negative": int(tn),
+                "false_positive": int(fp),
+                "false_negative": int(fn),
+                "true_positive": int(tp),
+            },
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+    elif config.task == "regression":
+        predictions = results_df["predicted_return"]
+        mae = mean_absolute_error(y_test, predictions)
+        rmse = root_mean_squared_error(y_test, predictions)
+
+        return{
+            "predictions": predictions,
+            "mae": mae,
+            "rmse": rmse
+        }

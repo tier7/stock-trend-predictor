@@ -180,7 +180,10 @@ def prepare_dataset_with_news(ticker, start_date, end_date):
     return combined
 
 
-def build_preopen_schedule(schedule, minutes_before_open=5):
+def build_preopen_schedule(schedule, minutes_before_open=5, horizon=1):
+    if type(horizon) is not int or horizon < 1:
+        raise ValueError("Horizon must be a positive integer")
+
     if not isinstance(minutes_before_open, int) or minutes_before_open <= 0:
         raise ValueError("minutes_before_open must be a positive integer")
     sessions = schedule.sort_index().copy()
@@ -193,8 +196,8 @@ def build_preopen_schedule(schedule, minutes_before_open=5):
     sessions["decision_at"] = sessions["market_open"].map(
         lambda opening: opening - pd.DateOffset(minutes=minutes_before_open)
     )
-    sessions["target_end_at"] = sessions["market_open"].shift(-1)
-    sessions["expected_target_end_date"] = dates.shift(-1)
+    sessions["target_end_at"] = sessions["market_open"].shift(-horizon)
+    sessions["expected_target_end_date"] = dates.shift(-horizon)
     if (sessions["decision_at"] <= sessions["previous_close"]).any():
         raise ValueError("Decision must fall after the previous market close")
     return sessions.reset_index()
@@ -217,14 +220,13 @@ def assign_news_to_preopen_sessions(news_df, sessions):
     ].copy()
 
 
-def build_news_timing_dataset(prepared_prices, news_df, schedule, start_date, end_date,
-                              minutes_before_open=5):
+def build_news_timing_dataset(prepared_prices, news_df, schedule, start_date, end_date,minutes_before_open=5, horizon=1):
 
     range_start = pd.to_datetime(start_date, utc=True)
     range_end = pd.to_datetime(end_date, utc=True)
     if range_start >= range_end:
         raise ValueError("Start date must be before end date")
-    sessions = build_preopen_schedule(schedule, minutes_before_open)
+    sessions = build_preopen_schedule(schedule, minutes_before_open, horizon=horizon)
     complete = sessions.loc[
         sessions["close_window_start"].ge(range_start)
         & sessions["decision_at"].ge(range_start)
@@ -279,7 +281,7 @@ def build_news_timing_dataset(prepared_prices, news_df, schedule, start_date, en
 
 
 def prepare_dataset_with_news_timing(ticker, start_date, end_date, minutes_before_open=5,
-                                     schedule=None):
+                                     schedule=None, horizon=1):
     ticker = ticker.upper()
     news_df = load_scored_news_range(ticker, start_date, end_date)
     prices = get_stock_data(ticker, years=None)
@@ -290,7 +292,7 @@ def prepare_dataset_with_news_timing(ticker, start_date, end_date, minutes_befor
         end = pd.to_datetime(end_date, utc=True) + pd.DateOffset(days=14)
         schedule = build_market_schedule(start.date().isoformat(), end.date().isoformat())
     combined = build_news_timing_dataset(
-        prepare_dataset(prices), news_df, schedule, start_date, end_date, minutes_before_open,
+        prepare_dataset(prices, horizon=horizon), news_df, schedule, start_date, end_date, minutes_before_open, horizon=horizon
     )
     combined["ticker"] = ticker
     return combined

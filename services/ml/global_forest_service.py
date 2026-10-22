@@ -1,16 +1,16 @@
 from datetime import date, datetime, timezone
 
-import numpy as np
 import sklearn
 
 from services.db import get_stock_data
-from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset, prepare_features
+from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset, prepare_latest_features
 from services.ml.model_service import build_backtest_result
 from services.ml.model_store_service import load_global_model, save_global_model
 from services.ml.walk_forward_service import (
     RETRAIN_INTERVAL,
     build_date_blocks,
     evaluate,
+    predict,
     split_dataset_by_date,
     train,
 )
@@ -19,6 +19,7 @@ from services.simulator_service import (
 )
 from services.data_updater import ensure_stock_data
 from services.data_fetcher import fetch_stock_data
+
 import pandas as pd
 
 tickers = [
@@ -150,9 +151,7 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
     if test_df.empty:
         raise ValueError("Brak danych do symulacji w wybranym okresie.")
 
-    test_df = test_df.copy()
-    test_df["prediction"] = model.predict(test_df[FEATURE_COLUMNS])
-    test_df["probability_up"] = model.predict_proba(test_df[FEATURE_COLUMNS])[:, 1]
+    test_df = predict(model, test_df, FEATURE_COLUMNS)
     test_df["baseline_prediction"] = metadata["baseline_prediction"]
     return test_df, metadata
 
@@ -174,23 +173,22 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
 
 def predict_latest_with_global_model(data, model_id, model_dir=None):
     model, metadata = load_global_model(model_id, model_dir)
-    features_df = prepare_features(data)
+    latest = prepare_latest_features(data, FEATURE_COLUMNS)
 
-    if features_df.empty:
-        raise ValueError("Brak danych do prognozy.")
-    latest = features_df.iloc[[-1]]
     forecast_date = str(latest["date"].iloc[0])
     if forecast_date < metadata["training_cutoff"]:
-        raise ValueError("Ostatnia sesja jest wcześniejsza od daty granicznej uczenia modelu.")
-    features = latest[FEATURE_COLUMNS]
-    if not np.isfinite(features.to_numpy(dtype=float)).all():
-        raise ValueError("Brak kompletnych cech dla ostatniej sesji. Sprawdź dane i długość historii.")
+        raise ValueError(
+            "Last session date is earlier than the model training cutoff."
+        )
+
+    forecast = predict(model, latest, FEATURE_COLUMNS).iloc[0]
+
     return {
         "date": forecast_date,
-        "prediction": int(model.predict(features)[0]),
-        "probability_up": float(model.predict_proba(features)[0, 1]),
+        "prediction": int(forecast["prediction"]),
+        "probability_up": float(forecast["probability_up"]),
         "model_metadata": metadata,
-        "horizon": "Od otwarcia następnej sesji do otwarcia kolejnej sesji.",
+        "horizon": "From the opening of the next session to the opening of the following session.",
     }
 
 
@@ -218,11 +216,9 @@ def predict_global_walk_forward(train_df, test_df, progress_callback=None):
         }
         if progress_callback:
             progress_callback(block)
+
         model = train(current_train_df, FEATURE_COLUMNS)
-        current_test_df["prediction"] = model.predict(current_test_df[FEATURE_COLUMNS])
-        current_test_df["probability_up"] = model.predict_proba(
-            current_test_df[FEATURE_COLUMNS]
-        )[:, 1]
+        current_test_df = predict(model, current_test_df, FEATURE_COLUMNS)
         current_test_df["baseline_prediction"] = int(current_train_df["target"].mode().iloc[0])
         prediction_blocks.append(current_test_df)
         training_blocks.append(block)
