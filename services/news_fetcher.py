@@ -2,9 +2,12 @@ import os
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from sympy.codegen.ast import Raise
+
 
 from services.ml.finbert_service import load_finbert, analyze_sentiment, MODEL_NAME, MODEL_REVISION
 from services.db import create_tables, save_news, get_news, save_sentiment, get_news_without_sentiment, get_news_with_sentiment, is_news_imported, save_news_import
@@ -12,6 +15,29 @@ from services.db import create_tables, save_news, get_news, save_sentiment, get_
 load_dotenv()
 
 NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+news_session = requests.Session()
+news_session.mount(
+    "https://",
+    HTTPAdapter(max_retries=Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        respect_retry_after_header=True,
+    )),
+)
+
+news_session = requests.Session()
+news_session.mount(
+    "https://",
+    HTTPAdapter(max_retries=Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        respect_retry_after_header=True,
+    )),
+)
 
 def fetch_news(ticker, start_date, end_date, page_token=None):
     api_key = os.getenv("ALPACA_API_KEY")
@@ -34,7 +60,7 @@ def fetch_news(ticker, start_date, end_date, page_token=None):
     if page_token is not None:
         params["page_token"] = page_token
 
-    response = requests.get(NEWS_URL, headers=headers, params=params, timeout=30)
+    response = news_session.get(NEWS_URL, headers=headers, params=params, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -121,57 +147,54 @@ def build_month_blocks(start_date, end_date):
         current = period_end
     return ranges
 
-
-if __name__ == "__main__":
-    '''create_tables()
-    ticker = "AAPL"
-
-    ranges = build_month_blocks(
-        "2023-01-01T00:00:00Z",
-        "2023-04-01T00:00:00Z",
-    )
-
-    for period in ranges:
-        result = import_news_range(
-            ticker,
-            period["start_date"],
-            period["end_date"],
-        )
-        print(ticker, period["start_date"][:7], result)
-    ticker = "AAPL"
-    scored_articles = get_news_with_sentiment(
-        ticker, MODEL_NAME, MODEL_REVISION
-    )
-
-    print("Wiadomości z ocenami:", len(scored_articles))
-
-    if scored_articles:
-        print(scored_articles[0])
-    '''
-    ticker = "AAPL"
-    articles = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
+def score_pending_news(ticker, tokenizer, model):
+    ticker = ticker.upper()
+    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
     results = []
-    accepted_articles = []
-
-    for article in articles:
-        relevance = classify_news_relevance(article, ticker)
-        if relevance["use_for_model"]:
-            accepted_articles.append(article)
-    if not accepted_articles:
-        print("No news to classify")
-    else:
-        tokenizer, model = load_finbert()
-        for article in accepted_articles:
+    inserted_count = 0
+    for article in pending:
+        if classify_news_relevance(article, ticker)["use_for_model"]:
             sentiment = analyze_sentiment(article["headline"], tokenizer, model)
             results.append({
                 "article_id": article["article_id"],
                 "updated_at": article["updated_at"],
                 "sentiment": sentiment,
             })
-            print(article["headline"])
-            print(sentiment)
 
-    inserted = save_sentiment(results, MODEL_NAME, MODEL_REVISION)
-    print("Zapisano ocen:", inserted)
+            if len(results) >= 100:
+                inserted_count += save_sentiment(results, MODEL_NAME, MODEL_REVISION)
+                results.clear()
+                print(ticker, "Zapisano ocen:", inserted_count, flush=True)
+
+    inserted_count += save_sentiment(results, MODEL_NAME, MODEL_REVISION)
+    return inserted_count
+if __name__ == "__main__":
+    create_tables()
+
+    tickers = [
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+        "META", "TSLA", "AMD", "INTC", "ORCL",
+        "JPM", "BAC", "GS", "V", "MA", "BRK-B",
+        "JNJ", "PFE", "LLY", "UNH", "ABBV",
+        "XOM", "CVX", "SHEL", "NEE",
+        "KO", "PEP", "MCD", "SBUX", "WMT",
+        "COST", "PG", "NKE", "MC.PA",
+        "DIS", "NFLX", "CMCSA", "VZ", "T", "TMUS",
+        "BA", "AIR.PA", "LMT", "CAT", "DE",
+        "UNP", "FDX", "UPS", "O", "AMT"
+    ]
+    periods = build_month_blocks(
+        "2021-01-01T00:00:00Z",
+        "2025-01-01T00:00:00Z",
+    )
+
+    tokenizer, model = load_finbert()
+
+    for ticker in tickers:
+        for period in periods:
+            news = import_news_range(ticker, period['start_date'], period['end_date'])
+            print(ticker, period['start_date'], period['end_date'], news)
+        inserted_count = score_pending_news(ticker, tokenizer, model)
+        print(ticker, "Zapisano ocen:", inserted_count)
 
 

@@ -121,16 +121,20 @@ def save_stock_data(data):
 
 def get_stock_data(ticker, interval="1d", years=5):
     conn = get_connection()
+    cur = conn.cursor()
     ticker = ticker.upper()
 
     if years is None:
         query = "SELECT * FROM stock_prices WHERE ticker = %s AND interval = %s ORDER BY date ASC"
-        data = pd.read_sql_query(query, conn, params=(ticker, interval))
+        cur.execute(query, (ticker, interval))
 
     else:
         query = """SELECT * FROM stock_prices WHERE ticker = %s AND interval = %s
               AND date >= to_char(CURRENT_DATE - (%s * INTERVAL '1 year'), 'YYYY-MM-DD') ORDER BY date ASC"""
-        data = pd.read_sql_query(query, conn, params=(ticker, interval, years))
+        cur.execute(query, (ticker, interval, years))
+
+    columns = [column.name for column in cur.description]
+    data = pd.DataFrame(cur.fetchall(), columns=columns)
 
     conn.close()
     return data
@@ -350,6 +354,22 @@ def is_news_imported(ticker, start_date, end_date):
     conn.close()
 
     return import_exists
+
+
+def get_news_imports(ticker, start_date, end_date):
+    """Read completed import blocks in one connection, without downloading news."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("""
+            SELECT start_at, end_at
+            FROM news_imports
+            WHERE ticker = %s AND start_at < %s AND end_at > %s
+            ORDER BY start_at, end_at
+        """, (ticker.upper(), end_date, start_date))
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 
 def save_news_import(ticker, start_date, end_date, fetched_count):
