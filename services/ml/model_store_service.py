@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from uuid import uuid4
 import torch
+from sklearn.base import is_classifier, is_regressor
+from services.ml.model_config import ModelConfig
 
 import joblib
 
@@ -64,8 +66,13 @@ def list_global_models(model_dir=None):
     return sorted(models, key=lambda item: item["created_at"], reverse=True)
 
 
-def get_active_global_model(model_dir=None, model_id=None):
-    models = list_global_models(model_dir)
+def get_active_global_model(model_dir=None, model_id=None, *, task="classification", horizon=1):
+    models = []
+    for metadata in list_global_models(model_dir):
+        config = get_model_config(metadata)
+
+        if config.task == task and config.horizon == horizon:
+            models.append(metadata)
     if model_id:
         for metadata in models:
             if metadata["model_id"] == model_id:
@@ -75,6 +82,16 @@ def get_active_global_model(model_dir=None, model_id=None):
         raise FileNotFoundError("Brak gotowego modelu globalnego. Możesz uruchomić model lokalny.")
     return models[0]
 
+
+def get_model_config(metadata):
+    if "config" in metadata:
+        return ModelConfig.from_dict(metadata["config"])
+
+    return ModelConfig(
+        algorithm="random_forest",
+        task="classification",
+        random_state=metadata.get("random_state", 26),
+    )
 
 def load_global_model(model_id, model_dir=None):
     path = model_path(model_id, model_dir)
@@ -89,9 +106,20 @@ def load_global_model(model_id, model_dir=None):
             metadata["model_id"] != model_id
             or metadata["format_version"] != MODEL_FORMAT_VERSION
             or metadata["feature_columns"] != FEATURE_COLUMNS
-            or list(model.classes_) != [0, 1]
         ):
             raise ValueError("Incompatible model")
+
+        config = get_model_config(metadata)
+
+        if config.algorithm != "random_forest" or config.scope != "global":
+            raise ValueError("Incompatible model configuration")
+
+        if config.task == "classification":
+            if not is_classifier(model) or list(model.classes_) != [0, 1]:
+                raise ValueError("Expected a binary classifier")
+
+        elif not is_regressor(model):
+            raise ValueError("Expected a regressor")
     except Exception as error:
         raise ValueError("Nie można wczytać modelu. Wytrenuj nową wersję.") from error
     return model, metadata

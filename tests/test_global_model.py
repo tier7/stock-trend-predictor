@@ -282,9 +282,9 @@ def test_walk_forward_simulates_selected_stock_and_retrains_every_20_sessions(
 ):
     training_frames = []
 
-    def capture_train(frame, features):
+    def capture_train(frame, features, config=None):
         training_frames.append(frame.copy())
-        return train(frame, features)
+        return train(frame, features, config=config)
 
     monkeypatch.setattr(global_service, "train", capture_train)
     monkeypatch.setattr(global_service, "save_global_model", lambda *args: pytest.fail("Simulation must not save models"))

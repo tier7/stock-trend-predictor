@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -44,3 +44,17 @@ class ModelConfig:
             return "target"
         else:
             return "target_return"
+
+    def to_dict(self):
+        values = asdict(self)
+        values["feature_groups"] = list(self.feature_groups)
+        return values
+
+    @classmethod
+    def from_dict(cls, data):
+        values = data.copy()
+
+        if "feature_groups" in values:
+            values["feature_groups"] = tuple(values[f"feature_groups"])
+
+        return cls(**values)

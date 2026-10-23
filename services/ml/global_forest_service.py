@@ -5,7 +5,7 @@ import sklearn
 from services.db import get_stock_data
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset, prepare_latest_features
 from services.ml.model_service import build_backtest_result
-from services.ml.model_store_service import load_global_model, save_global_model
+from services.ml.model_store_service import load_global_model, save_global_model, get_model_config
 from services.ml.walk_forward_service import (
     RETRAIN_INTERVAL,
     build_date_blocks,
@@ -19,6 +19,7 @@ from services.simulator_service import (
 )
 from services.data_updater import ensure_stock_data
 from services.data_fetcher import fetch_stock_data
+from services.ml.model_config import ModelConfig
 
 import pandas as pd
 
@@ -55,7 +56,7 @@ def split_dataset_by_tickers(data, train_tickers, test_tickers):
     test_df = data[data["ticker"].isin(test_tickers)]
     return train_df, test_df
 
-def connect_data(tickers, progress_callback=None):
+def connect_data(tickers, progress_callback=None, *, horizon=1):
     datasets = []
     for ticker in tickers:
         if not ensure_stock_data(ticker, "1d"):
@@ -63,7 +64,7 @@ def connect_data(tickers, progress_callback=None):
         data = get_stock_data(ticker,years=None)
         if data.empty:
             raise ValueError(f"Brak danych spółki {ticker} w bazie.")
-        data = prepare_dataset(data)
+        data = prepare_dataset(data, horizon)
         if data.empty:
             raise ValueError(f"Za mało danych do przygotowania cech spółki {ticker}.")
         data["ticker"] = ticker
@@ -101,9 +102,20 @@ def validate_simulation_dates(start_date, end_date):
         raise ValueError("Data końcowa musi być późniejsza od początkowej.")
 
 
-def train_global_model(training_cutoff, model_dir=None, progress_callback=None):
+def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None):
     validate_training_cutoff(training_cutoff)
-    data = connect_data(train_tickers, progress_callback=progress_callback)
+    if config is None:
+        config = ModelConfig(
+            algorithm="random_forest",
+            task="classification",
+        )
+
+    if config.algorithm != "random_forest" or config.scope != "global":
+        raise ValueError("Expected a global Random Forest configuration")
+
+    if config.feature_groups != ("technical",):
+        raise ValueError("This training pipeline currently supports technical features only")
+    data = connect_data(train_tickers, progress_callback=progress_callback, horizon=config.horizon)
     train_df = data[
         (data["date"] < training_cutoff) & (data["target_end_date"] <= training_cutoff)
     ]
@@ -114,7 +126,7 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None):
     if progress_callback:
         progress_callback(f"Uczenie foresta na {len(train_df)} próbkach. To może potrwać kilka minut.")
 
-    model = train(train_df, FEATURE_COLUMNS)
+    model = train(train_df, FEATURE_COLUMNS, config=config)
     metadata = {
         "training_cutoff": training_cutoff,
         "training_rows": int(len(train_df)),
@@ -123,13 +135,23 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None):
         "last_target_end_date": str(train_df["target_end_date"].max()),
         "train_tickers": list(train_tickers),
         "feature_columns": list(FEATURE_COLUMNS),
-        "baseline_prediction": int(train_df["target"].mode().iloc[0]),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sklearn_version": sklearn.__version__,
         "n_estimators": model.n_estimators,
         "random_state": model.random_state,
-        "target_definition": "open(t+2) > open(t+1)",
+        "config": config.to_dict(),
     }
+    if config.task == "classification":
+        metadata["baseline_prediction"] = int(
+            train_df["target"].mode().iloc[0])
+        metadata["target_definition"] = (
+            f"open(t+{config.horizon + 1}) > open(t+1)")
+    else:
+        metadata["baseline_return"] = float(
+            train_df["target_return"].mean())
+        metadata["target_definition"] = (
+            f"open(t+{config.horizon + 1}) / open(t+1) - 1")
+
     if progress_callback:
         progress_callback("Zapisywanie wytrenowanego modelu.")
     return save_global_model(model, metadata, model_dir)
@@ -139,6 +161,8 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
     validate_simulation_dates(start_date, end_date)
 
     model, metadata = load_global_model(model_id, model_dir)
+    config = get_model_config(metadata)
+    feature_columns = metadata["feature_columns"]
 
     if start_date < metadata["training_cutoff"]:
         raise ValueError(
@@ -146,13 +170,17 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
             "Dla wcześniejszego okresu wybierz model uczony na wcześniejszych danych."
         )
 
-    _, test_df = split_dataset_by_date(prepare_dataset(data), start_date, end_date)
+    prepared = prepare_dataset(data, horizon=config.horizon)
+    _, test_df = split_dataset_by_date(prepared, start_date, end_date)
+
 
     if test_df.empty:
         raise ValueError("Brak danych do symulacji w wybranym okresie.")
 
-    test_df = predict(model, test_df, FEATURE_COLUMNS)
-    test_df["baseline_prediction"] = metadata["baseline_prediction"]
+    test_df = predict(model, test_df, feature_columns, config=config)
+    if config.task == "classification":
+        test_df["baseline_prediction"] = metadata["baseline_prediction"]
+
     return test_df, metadata
 
 
@@ -161,6 +189,11 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
 
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
     results_df, metadata = predict_with_global_model(data, model_id, start_date, end_date, model_dir)
+    config = get_model_config(metadata)
+
+    if config.task != "classification" or config.horizon != 1:
+        raise ValueError(
+            "Obecny symulator obsługuje klasyfikację z horyzontem 1 sesji.")
     result = build_backtest_result(
         results_df, start_date, end_date, initial_cash, fee_rate, metadata["training_rows"],
         confidence_threshold=confidence_threshold,
@@ -173,7 +206,10 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
 
 def predict_latest_with_global_model(data, model_id, model_dir=None):
     model, metadata = load_global_model(model_id, model_dir)
-    latest = prepare_latest_features(data, FEATURE_COLUMNS)
+    config = get_model_config(metadata)
+    feature_columns = metadata["feature_columns"]
+
+    latest = prepare_latest_features(data, feature_columns)
 
     forecast_date = str(latest["date"].iloc[0])
     if forecast_date < metadata["training_cutoff"]:
@@ -181,16 +217,22 @@ def predict_latest_with_global_model(data, model_id, model_dir=None):
             "Last session date is earlier than the model training cutoff."
         )
 
-    forecast = predict(model, latest, FEATURE_COLUMNS).iloc[0]
+    forecast = predict(model, latest, feature_columns, config=config).iloc[0]
 
-    return {
+    result = {
         "date": forecast_date,
-        "prediction": int(forecast["prediction"]),
-        "probability_up": float(forecast["probability_up"]),
+        "task": config.task,
+        "horizon": config.horizon,
         "model_metadata": metadata,
-        "horizon": "From the opening of the next session to the opening of the following session.",
     }
 
+    if config.task == "classification":
+        result["prediction"] = int(forecast["prediction"])
+        result["probability_up"] = float(forecast["probability_up"])
+    else:
+        result["predicted_return"] = float(forecast["predicted_return"])
+
+    return result
 
 def predict_global_walk_forward(train_df, test_df, progress_callback=None):
     """Fit a fresh forest for each block, using only labels known at its start."""
