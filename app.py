@@ -17,6 +17,7 @@ from services.ml.global_forest_service import (
 from services.ml.global_training_service import GlobalTrainingJobs
 from services.ml.model_store_service import GLOBAL_MODEL_DIR, get_active_global_model, list_global_models
 import re
+from services.news_fetcher import NewsPreparationError
 
 
 
@@ -341,6 +342,12 @@ def global_simulation_api(ticker):
         )
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404
+
+    except NewsPreparationError as error:
+        app.logger.exception(
+            "News preparation failed for %s.",ticker,
+        )
+        return jsonify({"error": str(error)}), 503
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify(result)
@@ -396,6 +403,9 @@ def latest_global_prediction_api(ticker):
             data, request.args.get("model_id"), app.config["GLOBAL_MODEL_DIR"], ticker=ticker)
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404
+    except NewsPreparationError as error:
+        app.logger.exception("News preparation failed for %s.", ticker)
+        return jsonify({"error": str(error)}), 503
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify(result)

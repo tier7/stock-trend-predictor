@@ -4,29 +4,26 @@ import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
-from sympy.codegen.ast import Raise
+
+from services.ml.finbert_service import FinbertAnalyzer, MODEL_NAME, MODEL_REVISION
+from services.db import (
+    create_tables,
+    get_news_imports,
+    get_news_without_sentiment,
+    save_news,
+    save_news_import,
+    save_sentiment,
+)
 
 
-from services.ml.finbert_service import load_finbert, analyze_sentiment, MODEL_NAME, MODEL_REVISION
-from services.db import create_tables, save_news, get_news, save_sentiment, get_news_without_sentiment, get_news_with_sentiment, is_news_imported, save_news_import
+class NewsPreparationError(RuntimeError):
+    pass
+
 
 load_dotenv()
 
 NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
-news_session = requests.Session()
-news_session.mount(
-    "https://",
-    HTTPAdapter(max_retries=Retry(
-        total=5,
-        backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        respect_retry_after_header=True,
-    )),
-)
-
 news_session = requests.Session()
 news_session.mount(
     "https://",
@@ -44,7 +41,7 @@ def fetch_news(ticker, start_date, end_date, page_token=None):
     secret_key = os.getenv("ALPACA_SECRET_KEY")
 
     if not api_key or not secret_key:
-        raise RuntimeError("Missing Alpaca API credentials")
+        raise NewsPreparationError("Missing Alpaca API credentials")
     headers = {
         "APCA-API-KEY-ID": api_key,
         "APCA-API-SECRET-KEY": secret_key
@@ -60,19 +57,45 @@ def fetch_news(ticker, start_date, end_date, page_token=None):
     if page_token is not None:
         params["page_token"] = page_token
 
-    response = news_session.get(NEWS_URL, headers=headers, params=params, timeout=30)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = news_session.get(
+            NEWS_URL,
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as error:
+        raise NewsPreparationError(
+            f"{ticker}: Cannot download news from Alpaca."
+        ) from error
+
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("news"), list)
+    ):
+        raise NewsPreparationError(
+            f"{ticker}: Alpaca returned invalid format of news."
+        )
+
+    return payload
 
 def fetch_all_news(ticker, start_date, end_date):
     articles = []
     page_token = None
+    seen_tokens = set()
     while True:
         page = fetch_news(ticker, start_date, end_date, page_token=page_token)
         articles.extend(page["news"])
         page_token = page.get("next_page_token")
-        if not page_token:
+        if page_token is None or page_token == "":
             break
+        if not isinstance(page_token, str) or page_token in seen_tokens:
+            raise NewsPreparationError(
+                f"{ticker}: Alpaca returned invalid news pagination."
+            )
+        seen_tokens.add(page_token)
 
     return articles
 
@@ -108,27 +131,155 @@ def classify_news_relevance(article, ticker):
             "reason": "multiple_tickers"
         }
 
-def import_news_range(ticker, start_date, end_date):
+
+def find_missing_news_ranges(imports, start_date, end_date):
+    range_start = pd.to_datetime(start_date, utc=True)
+    range_end = pd.to_datetime(end_date, utc=True)
+
+    if pd.isna(range_start) or pd.isna(range_end):
+        raise ValueError("Range dates cannot be missing")
+
+    if range_start >= range_end:
+        raise ValueError("Start date must be before end date")
+
+    imported_ranges = []
+
+    for row in imports:
+        import_start = pd.to_datetime(row["start_at"], utc=True)
+        import_end = pd.to_datetime(row["end_at"], utc=True)
+        completed_at = pd.to_datetime(row["completed_at"], utc=True)
+
+        if import_end > completed_at:
+            continue
+
+        import_start = max(import_start, range_start)
+        import_end = min(import_end, range_end)
+
+        if import_start < import_end:
+            imported_ranges.append((import_start, import_end))
+
+    missing_ranges = []
+    covered_until = range_start
+
+    for import_start, import_end in sorted(imported_ranges):
+        if import_start > covered_until:
+            missing_ranges.append({
+                "start_date": covered_until.isoformat(),
+                "end_date": import_start.isoformat()})
+
+        covered_until = max(covered_until, import_end)
+
+        if covered_until >= range_end:
+            break
+
+    if covered_until < range_end:
+        missing_ranges.append({
+            "start_date": covered_until.isoformat(),
+            "end_date": range_end.isoformat(),
+        })
+
+    return missing_ranges
+
+
+def import_news_range(
+    ticker, start_date, end_date, *, as_of=None, refresh=False,
+    progress_callback=None,
+):
     ticker = ticker.upper()
-    is_imported = is_news_imported(ticker, start_date, end_date)
-    if is_imported:
+
+
+    range_start = pd.to_datetime(start_date, utc=True)
+    range_end = pd.to_datetime(end_date, utc=True)
+
+    now = pd.Timestamp.now(tz="UTC")
+    import_until = (
+        now if as_of is None
+        else pd.to_datetime(as_of, utc=True))
+
+    if (
+        pd.isna(range_start)
+        or pd.isna(range_end)
+        or pd.isna(import_until)):
+        raise ValueError("Import dates cannot be missing")
+
+    if range_start >= range_end:
+        raise ValueError("Start date must be before end date")
+
+    if import_until > now:
+        raise ValueError("as_of cannot be in the future")
+
+    range_end = min(range_end, import_until)
+
+    if range_start >= range_end:
+        raise ValueError("No import range before as_of")
+
+    start_date = range_start.isoformat()
+    end_date = range_end.isoformat()
+
+    if refresh:
+        ranges_to_import = [{
+            "start_date": start_date,
+            "end_date": end_date}]
+    else:
+        imports = get_news_imports(ticker, start_date, end_date)
+        ranges_to_import = find_missing_news_ranges(imports, start_date, end_date)
+
+    if not ranges_to_import:
+        if progress_callback:
+            progress_callback(f"{ticker}: Zakres wiadomości jest już w bazie.")
         return {
             "status": "skipped",
             "fetched_count": None,
-            "inserted_count": 0
+            "inserted_count": 0,
+            "start_date": start_date,
+            "end_date": end_date
         }
-    articles = fetch_all_news(ticker, start_date, end_date)
-    inserted_count = save_news(articles)
-    save_news_import(ticker, start_date, end_date, len(articles))
+
+    fetched_count = 0
+    inserted_count = 0
+
+    for missing_range in ranges_to_import:
+        periods = build_month_blocks(missing_range["start_date"],missing_range["end_date"])
+
+        for period in periods:
+            period_start = period["start_date"]
+            period_end = period["end_date"]
+
+            if progress_callback:
+                progress_callback(
+                    f"{ticker}: Pobieranie wiadomości {period_start} — {period_end}."
+                )
+
+            articles = fetch_all_news(
+                ticker, period_start, period_end)
+
+            inserted_count += save_news(articles)
+            save_news_import(
+                ticker,
+                period_start,
+                period_end,
+                len(articles))
+
+            fetched_count += len(articles)
+            if progress_callback:
+                progress_callback(
+                    f"{ticker}: Zakończono blok; pobrano wiadomości: {len(articles)}."
+                )
+
     return {
         "status": "completed",
-        "fetched_count": len(articles),
-        "inserted_count": inserted_count
+        "fetched_count": fetched_count,
+        "inserted_count": inserted_count,
+        "start_date": start_date,
+        "end_date": end_date
     }
 
 def build_month_blocks(start_date, end_date):
-    start = pd.to_datetime(start_date)
-    end = pd.to_datetime(end_date)
+    start = pd.to_datetime(start_date, utc=True)
+    end = pd.to_datetime(end_date, utc=True)
+
+    if pd.isna(start) or pd.isna(end):
+        raise ValueError("Range dates cannot be missing")
 
     if start >= end:
         raise ValueError("Start date must be before end date")
@@ -147,14 +298,22 @@ def build_month_blocks(start_date, end_date):
         current = period_end
     return ranges
 
-def score_pending_news(ticker, tokenizer, model):
+def score_pending_news(
+    ticker, analyzer, *, start_date=None, end_date=None,
+    progress_callback=None,
+):
     ticker = ticker.upper()
-    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
+    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION, start_date=start_date, end_date=end_date)
     results = []
     inserted_count = 0
     for article in pending:
         if classify_news_relevance(article, ticker)["use_for_model"]:
-            sentiment = analyze_sentiment(article["headline"], tokenizer, model)
+            try:
+                sentiment = analyzer.analyze(article["headline"])
+            except (OSError, RuntimeError) as error:
+                raise NewsPreparationError(
+                    f"{ticker}: Cannot calculate FinBERT score for {article['article_id']}."
+                ) from error
             results.append({
                 "article_id": article["article_id"],
                 "updated_at": article["updated_at"],
@@ -164,10 +323,53 @@ def score_pending_news(ticker, tokenizer, model):
             if len(results) >= 100:
                 inserted_count += save_sentiment(results, MODEL_NAME, MODEL_REVISION)
                 results.clear()
-                print(ticker, "Zapisano ocen:", inserted_count, flush=True)
+                if progress_callback:
+                    progress_callback(
+                        f"{ticker}: Zapisano ocen FinBERT: {inserted_count}."
+                    )
 
     inserted_count += save_sentiment(results, MODEL_NAME, MODEL_REVISION)
     return inserted_count
+
+def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False,as_of=None,progress_callback=None):
+    ticker = ticker.upper()
+
+    if progress_callback:
+        progress_callback(f"{ticker}: Przygotowywanie wiadomości.")
+
+    import_result = import_news_range(
+        ticker,
+        start_date,
+        end_date,
+        as_of=as_of,
+        refresh=refresh,
+        progress_callback=progress_callback,
+    )
+
+    if analyzer is None:
+        analyzer = FinbertAnalyzer()
+
+    if progress_callback:
+        progress_callback(f"{ticker}: Sprawdzanie brakujących ocen FinBERT.")
+
+    sentiments_inserted = score_pending_news(
+        ticker,
+        analyzer,
+        start_date=import_result["start_date"],
+        end_date=import_result["end_date"],
+        progress_callback=progress_callback,
+    )
+
+    if progress_callback:
+        progress_callback(f"{ticker}: Zapisano ocen FinBERT: {sentiments_inserted}.")
+
+    return {
+        "ticker": ticker,
+        "start_date": import_result["start_date"],
+        "end_date": import_result["end_date"],
+        "import": import_result,
+        "sentiments_inserted": sentiments_inserted
+    }
 if __name__ == "__main__":
     create_tables()
 
@@ -188,13 +390,18 @@ if __name__ == "__main__":
         "2025-01-01T00:00:00Z",
     )
 
-    tokenizer, model = load_finbert()
+    analyzer = FinbertAnalyzer()
+    import_as_of = pd.Timestamp.now(tz="UTC")
 
     for ticker in tickers:
-        for period in periods:
-            news = import_news_range(ticker, period['start_date'], period['end_date'])
-            print(ticker, period['start_date'], period['end_date'], news)
-        inserted_count = score_pending_news(ticker, tokenizer, model)
-        print(ticker, "Zapisano ocen:", inserted_count)
+        result = ensure_news_data(
+            ticker,
+            periods[0]["start_date"],
+            periods[-1]["end_date"],
+            analyzer=analyzer,
+            as_of=import_as_of,
+            progress_callback=print,
+        )
+        print(ticker, result)
 
 

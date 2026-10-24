@@ -2,7 +2,7 @@ import pandas as pd
 import pandas_market_calendars as mcal
 from services.db import (get_news_imports,get_news_without_sentiment,get_news_with_sentiment,)
 from services.ml.finbert_service import MODEL_NAME, MODEL_REVISION
-from services.news_fetcher import classify_news_relevance
+from services.news_fetcher import classify_news_relevance, find_missing_news_ranges
 from services.ml.feature_schema import NEWS_FEATURE_COLUMNS
 
 NEWS_FEATURE_POLICY = {
@@ -54,40 +54,28 @@ def load_scored_news_range(ticker, start_date, end_date):
     range_start = pd.to_datetime(start_date, utc=True)
     range_end = pd.to_datetime(end_date, utc=True)
 
+    if pd.isna(range_start) or pd.isna(range_end):
+        raise ValueError("Range dates cannot be missing")
+
     if range_start >= range_end:
         raise ValueError("Start date must be before end date")
 
     imports = get_news_imports(ticker, range_start, range_end)
-    imported_ranges = {
-        (pd.to_datetime(row["start_at"], utc=True), pd.to_datetime(row["end_at"], utc=True))
-        for row in imports
-    }
 
-    covered_until = range_start
-    for import_start, import_end in sorted(imported_ranges):
-        if import_start > covered_until:
-            raise ValueError(
-                f"{ticker}: Missing news coverage between "
-                f"{covered_until} and {import_start}"
-            )
-        covered_until = max(covered_until, import_end)
-        if covered_until >= range_end:
-            break
-    if covered_until < range_end:
-        raise ValueError("No full date coverage")
+    missing_ranges = find_missing_news_ranges(imports, range_start, range_end)
+
+    if missing_ranges:
+        first_missing = missing_ranges[0]
+        raise ValueError(
+            f"{ticker}: Missing news coverage between "
+            f"{first_missing['start_date']} and "
+            f"{first_missing['end_date']}")
 
 
-
-    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
+    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION, start_date=range_start, end_date=range_end)
 
     for article in pending:
-        available_at = pd.to_datetime(max(article["created_at"], article["updated_at"]),utc=True,)
-
-        if not (range_start <= available_at < range_end):
-            continue
-
-        relevance = classify_news_relevance(article, ticker)
-        if relevance["use_for_model"]:
+        if classify_news_relevance(article, ticker)["use_for_model"]:
             raise ValueError(f"{ticker}: First calculate the missing FinBERT scores")
 
     articles = get_news_with_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
@@ -234,11 +222,17 @@ def attach_preopen_news_features(data,ticker,start_date,end_date,minutes_before_
 
 def get_latest_news_window(feature_date, as_of=None):
     feature_date = pd.Timestamp(feature_date).strftime("%Y-%m-%d")
+    now = pd.Timestamp.now(tz="UTC")
     as_of = (
-        pd.Timestamp.now(tz="UTC")
-        if as_of is None
+        now if as_of is None
         else pd.to_datetime(as_of, utc=True)
     )
+
+    if pd.isna(as_of):
+        raise ValueError("as_of cannot be missing")
+
+    if as_of > now:
+        raise ValueError("as_of cannot be in the future")
 
     calendar_end = (pd.Timestamp(feature_date) + pd.DateOffset(days=14)).date().isoformat()
 
@@ -266,4 +260,5 @@ def get_latest_news_window(feature_date, as_of=None):
         "news_end": as_of.isoformat(),
         "execution_date": session["execution_date"],
         "decision_at": session["decision_at"].isoformat(),
+        "market_open": session["market_open"].isoformat(),
     }

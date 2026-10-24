@@ -26,6 +26,18 @@ def analyze_sentiment(text, tokenizer, model):
         result[class_name] = prob.item()
     return result
 
+class FinbertAnalyzer:
+    def __init__(self):
+        self.tokenizer = None
+        self.model = None
+
+    def analyze(self, text):
+        if self.model is None:
+            self.tokenizer, self.model = load_finbert()
+
+        return analyze_sentiment(
+            text, self.tokenizer, self.model)
+
 if __name__ == "__main__":
     tokenizer, model = load_finbert()
     texts = [

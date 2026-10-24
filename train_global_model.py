@@ -4,6 +4,7 @@ import argparse
 from services.ml.global_forest_service import train_global_model
 from services.ml.model_config import ModelConfig
 from services.ml.feature_schema import FEATURE_GROUPS
+from services.news_fetcher import NewsPreparationError
 
 def main():
     parser = argparse.ArgumentParser(description="Wytrenuj i zapisz gotowy model globalny.")
@@ -24,7 +25,6 @@ def main():
         default=1,
         help="Horyzont prognozy w sesjach giełdowych.",
     )
-
 
     parser.add_argument(
         "--feature-groups",
@@ -49,6 +49,11 @@ def main():
         type=str.upper,
         help="Lista spółek treningowych.",
     )
+    parser.add_argument(
+        "--prepared-news-only",
+        action="store_true",
+        help="Korzystaj wyłącznie z zapisanych newsów i ocen FinBERT.",
+    )
 
 
 
@@ -67,8 +72,12 @@ def main():
             config=config,
             news_start=arguments.news_start,
             news_end=arguments.news_end,
-            training_tickers=arguments.tickers
+            training_tickers=arguments.tickers,
+            prepare_news = not arguments.prepared_news_only,
         )
+
+    except NewsPreparationError as error:
+        parser.exit(1, f"News preparation failed: {error}\n")
     except ValueError as error:
         parser.error(str(error))
     print(f"Zapisano model: {metadata['model_id']}")

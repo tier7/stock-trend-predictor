@@ -235,8 +235,6 @@ def get_latest_stock_summary(ticker, interval="1d"):
 def save_news(articles):
     if len(articles) <= 0:
         return 0
-    conn = get_connection()
-    cur = conn.cursor()
 
     rows = []
     for article in articles:
@@ -249,14 +247,17 @@ def save_news(articles):
         )
         rows.append(row)
 
-    cur.executemany("""INSERT INTO news_articles (article_id, headline, symbols, created_at, updated_at)
-    VALUES (%s, %s, %s, %s, %s)
-    ON CONFLICT (article_id, updated_at) DO NOTHING""", rows)
-    inserted_count = cur.rowcount
-    conn.commit()
-    conn.close()
-
-    return inserted_count
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.executemany("""INSERT INTO news_articles (article_id, headline, symbols, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (article_id, updated_at) DO NOTHING""", rows)
+        inserted_count = cur.rowcount
+        conn.commit()
+        return inserted_count
+    finally:
+        conn.close()
 
 def get_news(ticker):
     conn = get_connection()
@@ -277,8 +278,6 @@ def get_news(ticker):
 def save_sentiment(results, model_name, model_revision):
     if len(results) <= 0:
         return 0
-    conn = get_connection()
-    cur = conn.cursor()
 
     rows = []
     for result in results:
@@ -293,38 +292,60 @@ def save_sentiment(results, model_name, model_revision):
         )
         rows.append(row)
 
-    cur.executemany("""INSERT INTO news_sentiments (article_id, article_updated_at, model_name, model_revision, positive_probability, negative_probability, neutral_probability)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (article_id, article_updated_at, model_name, model_revision) DO NOTHING""", rows)
-    inserted_count = cur.rowcount
-    conn.commit()
-    conn.close()
-
-    return inserted_count
-
-def get_news_without_sentiment(ticker, model_name, model_revision):
     conn = get_connection()
-    cur = conn.cursor(row_factory=dict_row)
-    cur.execute(f"""
-    SELECT n.article_id, n.headline, n.symbols, n.created_at, n.updated_at
-    FROM news_articles AS n
-    WHERE %s = ANY(n.symbols)
-    AND NOT EXISTS (
-    SELECT 1
-    FROM news_sentiments AS s
-    WHERE s.article_id = n.article_id
-    AND s.article_updated_at = n.updated_at
-    AND s.model_name = %s
-    AND s.model_revision = %s
-    )
-    ORDER BY n.created_at, n.article_id, n.updated_at  
-    """, (ticker.upper(), model_name, model_revision))
+    try:
+        cur = conn.cursor()
+        cur.executemany("""INSERT INTO news_sentiments (article_id, article_updated_at, model_name, model_revision, positive_probability, negative_probability, neutral_probability)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (article_id, article_updated_at, model_name, model_revision) DO NOTHING""", rows)
+        inserted_count = cur.rowcount
+        conn.commit()
+        return inserted_count
+    finally:
+        conn.close()
 
-    articles = cur.fetchall()
+def get_news_without_sentiment(ticker, model_name, model_revision, *,start_date=None, end_date=None,):
+    if (start_date is None) != (end_date is None):
+        raise ValueError("Provide both start_date and end_date")
 
-    conn.close()
+    query = """
+        SELECT n.article_id, n.headline, n.symbols, n.created_at, n.updated_at
+        FROM news_articles AS n
+        WHERE %s = ANY(n.symbols)
+        AND NOT EXISTS (
+            SELECT 1
+            FROM news_sentiments AS s
+            WHERE s.article_id = n.article_id
+            AND s.article_updated_at = n.updated_at
+            AND s.model_name = %s
+            AND s.model_revision = %s)"""
 
-    return articles
+    params = [ticker.upper(), model_name, model_revision]
+
+    if start_date is not None:
+        range_start = pd.to_datetime(start_date, utc=True)
+        range_end = pd.to_datetime(end_date, utc=True)
+
+        if pd.isna(range_start) or pd.isna(range_end):
+            raise ValueError("Range dates cannot be missing")
+
+        if range_start >= range_end:
+            raise ValueError("Start date must be before end date")
+
+        query += """
+            AND GREATEST(n.created_at, n.updated_at) >= %s
+            AND GREATEST(n.created_at, n.updated_at) < %s"""
+        params.extend([range_start, range_end])
+
+    query += "\nORDER BY n.created_at, n.article_id, n.updated_at"
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(query, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 def get_news_with_sentiment(ticker, model_name, model_revision):
     conn = get_connection()
@@ -345,24 +366,14 @@ def get_news_with_sentiment(ticker, model_name, model_revision):
     conn.close()
     return articles
 
-def is_news_imported(ticker, start_date, end_date):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""SELECT 1 FROM news_imports WHERE ticker = %s AND start_at = %s AND end_at = %s""", (ticker.upper(),start_date, end_date))
-
-    import_exists = cur.fetchone() is not None
-    conn.close()
-
-    return import_exists
 
 
 def get_news_imports(ticker, start_date, end_date):
-    """Read completed import blocks in one connection, without downloading news."""
     conn = get_connection()
     try:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute("""
-            SELECT start_at, end_at
+            SELECT start_at, end_at, completed_at
             FROM news_imports
             WHERE ticker = %s AND start_at < %s AND end_at > %s
             ORDER BY start_at, end_at
@@ -374,17 +385,18 @@ def get_news_imports(ticker, start_date, end_date):
 
 def save_news_import(ticker, start_date, end_date, fetched_count):
     conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""INSERT INTO news_imports (ticker, start_at, end_at, fetched_count)
-    VALUES (%s, %s, %s, %s)
-    ON CONFLICT (ticker, start_at, end_at) DO NOTHING""", (ticker.upper(), start_date, end_date, fetched_count)
-    )
-
-    inserted_count = cur.rowcount
-    conn.commit()
-    conn.close()
-    return inserted_count
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO news_imports (ticker, start_at, end_at, fetched_count)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (ticker, start_at, end_at) DO UPDATE SET
+        fetched_count = EXCLUDED.fetched_count, completed_at = NOW()
+        """, (ticker.upper(), start_date, end_date, fetched_count))
+        saved_count = cur.rowcount
+        conn.commit()
+        return saved_count
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     create_tables()
