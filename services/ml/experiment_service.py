@@ -41,6 +41,7 @@ def run_simulation(ticker, model_type, start_date, end_date, global_model_id=Non
             initial_cash=initial_cash,
             fee_rate=fee_rate,
             confidence_threshold=confidence_threshold,
+            ticker=ticker
         )
     elif model_type == "local":
         result = train_and_predict(

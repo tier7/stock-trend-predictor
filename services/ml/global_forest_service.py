@@ -20,6 +20,9 @@ from services.simulator_service import (
 from services.data_updater import ensure_stock_data
 from services.data_fetcher import fetch_stock_data
 from services.ml.model_config import ModelConfig
+from services.ml.feature_schema import get_feature_columns
+from services.ml.news_feature_service import NEWS_FEATURE_POLICY, get_latest_news_window
+
 
 import pandas as pd
 
@@ -56,7 +59,7 @@ def split_dataset_by_tickers(data, train_tickers, test_tickers):
     test_df = data[data["ticker"].isin(test_tickers)]
     return train_df, test_df
 
-def connect_data(tickers, progress_callback=None, *, horizon=1):
+def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None):
     datasets = []
     for ticker in tickers:
         if not ensure_stock_data(ticker, "1d"):
@@ -64,7 +67,7 @@ def connect_data(tickers, progress_callback=None, *, horizon=1):
         data = get_stock_data(ticker,years=None)
         if data.empty:
             raise ValueError(f"Brak danych spółki {ticker} w bazie.")
-        data = prepare_dataset(data, horizon)
+        data = prepare_dataset(data, horizon=horizon, feature_columns=feature_columns, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end)
         if data.empty:
             raise ValueError(f"Za mało danych do przygotowania cech spółki {ticker}.")
         data["ticker"] = ticker
@@ -102,7 +105,7 @@ def validate_simulation_dates(start_date, end_date):
         raise ValueError("Data końcowa musi być późniejsza od początkowej.")
 
 
-def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None):
+def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None, news_start=None, news_end=None, training_tickers=None):
     validate_training_cutoff(training_cutoff)
     if config is None:
         config = ModelConfig(
@@ -113,34 +116,51 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
     if config.algorithm != "random_forest" or config.scope != "global":
         raise ValueError("Expected a global Random Forest configuration")
 
-    if config.feature_groups != ("technical",):
-        raise ValueError("This training pipeline currently supports technical features only")
-    data = connect_data(train_tickers, progress_callback=progress_callback, horizon=config.horizon)
+    if "news" in config.feature_groups:
+        if news_start is None or news_end is None:
+            raise ValueError("News features require news_start and news_end")
+
+        if training_tickers is None:
+            raise ValueError("News features require an explicit list of training tickers")
+
+    feature_columns = get_feature_columns(config.feature_groups)
+
+
+    selected_tickers = list(train_tickers if training_tickers is None else training_tickers)
+
+    if not selected_tickers:
+        raise ValueError("Training tickers cannot be empty")
+
+    data = connect_data(selected_tickers, progress_callback=progress_callback, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups, news_start=news_start, news_end=news_end)
     train_df = data[
         (data["date"] < training_cutoff) & (data["target_end_date"] <= training_cutoff)
     ]
-    missing_tickers = sorted(set(train_tickers) - set(train_df["ticker"]))
+    missing_tickers = sorted(set(selected_tickers) - set(train_df["ticker"]))
     if missing_tickers:
         raise ValueError(f"Brak próbek treningowych przed wybraną datą: {missing_tickers}.")
 
     if progress_callback:
         progress_callback(f"Uczenie foresta na {len(train_df)} próbkach. To może potrwać kilka minut.")
 
-    model = train(train_df, FEATURE_COLUMNS, config=config)
+    model = train(train_df, feature_columns, config=config)
     metadata = {
         "training_cutoff": training_cutoff,
         "training_rows": int(len(train_df)),
         "training_start_date": str(train_df["date"].min()),
         "training_end_date": str(train_df["date"].max()),
         "last_target_end_date": str(train_df["target_end_date"].max()),
-        "train_tickers": list(train_tickers),
-        "feature_columns": list(FEATURE_COLUMNS),
+        "train_tickers": selected_tickers,
+        "feature_columns": list(feature_columns),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sklearn_version": sklearn.__version__,
         "n_estimators": model.n_estimators,
         "random_state": model.random_state,
         "config": config.to_dict(),
     }
+    if "news" in config.feature_groups:
+        metadata["news_policy"] = NEWS_FEATURE_POLICY.copy()
+        metadata["news_start"] = pd.to_datetime(news_start, utc=True).isoformat()
+        metadata["news_end"] = pd.to_datetime(news_end, utc=True).isoformat()
     if config.task == "classification":
         metadata["baseline_prediction"] = int(
             train_df["target"].mode().iloc[0])
@@ -157,7 +177,7 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
     return save_global_model(model, metadata, model_dir)
 
 
-def predict_with_global_model(data, model_id, start_date, end_date, model_dir=None):
+def predict_with_global_model(data, model_id, start_date, end_date, model_dir=None, *, ticker=None):
     validate_simulation_dates(start_date, end_date)
 
     model, metadata = load_global_model(model_id, model_dir)
@@ -170,7 +190,7 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
             "Dla wcześniejszego okresu wybierz model uczony na wcześniejszych danych."
         )
 
-    prepared = prepare_dataset(data, horizon=config.horizon)
+    prepared = prepare_dataset(data, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups,ticker=ticker, news_start=start_date, news_end=end_date)
     _, test_df = split_dataset_by_date(prepared, start_date, end_date)
 
 
@@ -185,10 +205,10 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
 
 
 def simulate_with_global_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir=None,
-                               *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+                               *, ticker=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
 
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
-    results_df, metadata = predict_with_global_model(data, model_id, start_date, end_date, model_dir)
+    results_df, metadata = predict_with_global_model(data, model_id, start_date, end_date, model_dir, ticker=ticker)
     config = get_model_config(metadata)
 
     if config.task != "classification" or config.horizon != 1:
@@ -204,12 +224,28 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
     return result
 
 
-def predict_latest_with_global_model(data, model_id, model_dir=None):
+def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=None, as_of=None):
     model, metadata = load_global_model(model_id, model_dir)
     config = get_model_config(metadata)
     feature_columns = metadata["feature_columns"]
 
-    latest = prepare_latest_features(data, feature_columns)
+    if data.empty:
+        raise ValueError("Empty stock data")
+
+    news_window = {}
+
+    if "news" in config.feature_groups:
+        latest_price_date = pd.to_datetime(data["date"]).max()
+        news_window = get_latest_news_window(latest_price_date,as_of=as_of)
+
+    latest = prepare_latest_features(
+        data,
+        feature_columns,
+        feature_groups=config.feature_groups,
+        ticker=ticker,
+        news_start=news_window.get("news_start"),
+        news_end=news_window.get("news_end"),
+    )
 
     forecast_date = str(latest["date"].iloc[0])
     if forecast_date < metadata["training_cutoff"]:
@@ -225,6 +261,11 @@ def predict_latest_with_global_model(data, model_id, model_dir=None):
         "horizon": config.horizon,
         "model_metadata": metadata,
     }
+
+    if news_window:
+        result["execution_date"] = news_window["execution_date"]
+        result["decision_at"] = news_window["decision_at"]
+        result["as_of"] = news_window["news_end"]
 
     if config.task == "classification":
         result["prediction"] = int(forecast["prediction"])

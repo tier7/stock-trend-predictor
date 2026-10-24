@@ -337,7 +337,7 @@ def global_simulation_api(ticker):
         result = simulate_with_global_model(
             data, payload.get("model_id"), payload.get("start_date"), payload.get("end_date"),
             initial_cash, fee_rate, app.config["GLOBAL_MODEL_DIR"],
-            confidence_threshold=confidence_threshold,
+            confidence_threshold=confidence_threshold, ticker=ticker
         )
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404
@@ -393,8 +393,7 @@ def latest_global_prediction_api(ticker):
         return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
     try:
         result = predict_latest_with_global_model(
-            data, request.args.get("model_id"), app.config["GLOBAL_MODEL_DIR"],
-        )
+            data, request.args.get("model_id"), app.config["GLOBAL_MODEL_DIR"], ticker=ticker)
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404
     except ValueError as error:

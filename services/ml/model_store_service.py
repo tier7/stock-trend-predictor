@@ -9,6 +9,8 @@ from services.ml.model_config import ModelConfig
 import joblib
 
 from services.ml.dataset_service import FEATURE_COLUMNS
+from services.ml.feature_schema import get_feature_columns
+from services.ml.news_feature_service import NEWS_FEATURE_POLICY
 
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
@@ -53,11 +55,15 @@ def list_global_models(model_dir=None):
     for path in directory.glob("global_forest_*.json"):
         try:
             metadata = json.loads(path.read_text(encoding="utf-8"))
+            config = get_model_config(metadata)
+            expected_columns = get_feature_columns(config.feature_groups)
             if (
                 metadata["model_id"] == path.stem
                 and model_path(path.stem, directory).is_file()
                 and metadata["format_version"] == MODEL_FORMAT_VERSION
-                and metadata["feature_columns"] == FEATURE_COLUMNS
+                and metadata["feature_columns"] == expected_columns
+                and ("news" not in config.feature_groups
+                or metadata.get("news_policy") == NEWS_FEATURE_POLICY)
             ):
                 models.append(metadata)
         except (OSError, ValueError, KeyError, TypeError):
@@ -102,14 +108,22 @@ def load_global_model(model_id, model_dir=None):
         bundle = joblib.load(path)
         metadata = bundle["metadata"]
         model = bundle["model"]
+        config = get_model_config(metadata)
+        if "news" in config.feature_groups:
+            if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
+                raise ValueError("Incompatible news feature policy")
+        expected_columns = get_feature_columns(config.feature_groups)
         if (
             metadata["model_id"] != model_id
             or metadata["format_version"] != MODEL_FORMAT_VERSION
-            or metadata["feature_columns"] != FEATURE_COLUMNS
+            or metadata["feature_columns"] != expected_columns
         ):
             raise ValueError("Incompatible model")
 
-        config = get_model_config(metadata)
+        if list(model.feature_names_in_) != metadata["feature_columns"]:
+            raise ValueError("Model features do not match metadata")
+
+
 
         if config.algorithm != "random_forest" or config.scope != "global":
             raise ValueError("Incompatible model configuration")
