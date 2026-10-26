@@ -15,6 +15,28 @@ NEWS_FEATURE_POLICY = {
     "relevance_filter": "single_ticker",
 }
 
+def normalize_training_news_range(news_start, news_end, training_cutoff):
+    if news_start is None or news_end is None:
+        raise ValueError("News range cannot be missing")
+
+    range_start = pd.to_datetime(news_start, utc=True)
+    range_end = pd.to_datetime(news_end, utc=True)
+    cutoff = pd.to_datetime(training_cutoff, utc=True)
+
+
+    if pd.isna(range_start) or pd.isna(range_end) or pd.isna(cutoff):
+        raise ValueError("Range dates cannot be missing")
+
+    if range_start >= range_end:
+        raise ValueError("Start range cannot be higher than end range")
+
+    now = pd.Timestamp.now(tz="UTC")
+    range_end = min(range_end, cutoff, now)
+    if range_start >= range_end:
+        raise ValueError("Start range cannot be higher than end range")
+
+    return range_start.isoformat(), range_end.isoformat()
+
 def prepare_news_dataframe(articles):
     data = pd.DataFrame(articles)
     if data.empty:

@@ -3,7 +3,8 @@ from copy import deepcopy
 from threading import Lock, Thread
 from uuid import uuid4
 
-from services.ml.global_forest_service import train_global_model, validate_training_cutoff
+from services.ml.global_forest_service import train_global_model
+from services.ml.data_preparation_service import validate_training_cutoff
 
 
 class GlobalTrainingJobs:

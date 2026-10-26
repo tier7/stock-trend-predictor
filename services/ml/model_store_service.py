@@ -11,12 +11,14 @@ import joblib
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.feature_schema import get_feature_columns
 from services.ml.news_feature_service import NEWS_FEATURE_POLICY
+from services.ml.mlp_model import NeuralNetwork
 
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
 MODEL_ID_PATTERN = re.compile(r"global_forest_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
 TORCH_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "neural_networks")
+TORCH_MODEL_FORMAT_VERSION = 1
 
 
 def model_path(model_id, model_dir=None):
@@ -141,11 +143,13 @@ def load_global_model(model_id, model_dir=None):
 
 def save_torch_model(model, scaler, metadata, model_dir=None):
     metadata = dict(metadata)
+    metadata["format_version"] = TORCH_MODEL_FORMAT_VERSION
     metadata["model_id"] = (
         f"{metadata['architecture']}_"
         f"{metadata['training_cutoff']}_"
-        f"{uuid4().hex[:8]}"
-    )
+        f"{uuid4().hex[:8]}")
+
+    validate_torch_metadata(metadata)
 
     directory = (Path(model_dir or TORCH_MODEL_DIR) / metadata["model_id"])
     directory.mkdir(parents=True, exist_ok=True)
@@ -160,13 +164,16 @@ def save_torch_model(model, scaler, metadata, model_dir=None):
 
     return metadata
 
-def load_torch_model(model, model_id, model_dir=None):
+def load_torch_model(model_id, model_dir=None):
+    if not isinstance(model_id, str) or not re.fullmatch(r"mlp_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}",model_id):
+        raise ValueError("Incompatible model ID")
+
     directory = Path(model_dir or TORCH_MODEL_DIR) / model_id
     metadata_path = directory / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    config = validate_torch_metadata(metadata)
 
-    if metadata["feature_columns"] != FEATURE_COLUMNS:
-        raise ValueError("Incompatible feature columns")
+
     if metadata["model_id"] != model_id:
         raise ValueError("Incompatible model ID")
     state_dict = torch.load(
@@ -175,7 +182,48 @@ def load_torch_model(model, model_id, model_dir=None):
         weights_only=True,
     )
 
+    model = NeuralNetwork(input_size=metadata["input_size"])
     model.load_state_dict(state_dict)
     scaler = joblib.load(directory / "scaler.joblib")
+
+    if scaler.n_features_in_ != metadata["input_size"]:
+        raise ValueError("Incompatible input size")
+    if list(scaler.feature_names_in_) != metadata["feature_columns"]:
+        raise ValueError("Incompatible feature columns")
+
     model.eval()
     return model, scaler, metadata
+
+def validate_torch_metadata(metadata):
+
+    if metadata.get("format_version") != TORCH_MODEL_FORMAT_VERSION:
+        raise ValueError("Unsupported MLP format. Train a new model.")
+
+    config = ModelConfig.from_dict(metadata["config"])
+
+
+    if "news" in config.feature_groups:
+        if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
+            raise ValueError("Incompatible news feature policy")
+
+    if config.algorithm != "mlp":
+        raise ValueError("Incompatible model configuration")
+
+    if config.scope != "global":
+        raise ValueError("Incompatible model configuration")
+
+    if metadata["architecture"] != "mlp":
+        raise ValueError("Incompatible model configuration")
+
+    expected_columns = get_feature_columns(config.feature_groups)
+
+    if metadata["feature_columns"] != expected_columns:
+        raise ValueError("Model features do not match metadata")
+    if metadata["input_size"] != len(expected_columns):
+        raise ValueError("Model input sizes do not match metadata")
+
+    if metadata["hidden_sizes"] != [64, 32]:
+        raise ValueError("Unsupported MLP architecture")
+
+    return config
+

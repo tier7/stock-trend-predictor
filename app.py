@@ -11,13 +11,13 @@ from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_co
 from services.ml.global_forest_service import (
     predict_latest_with_global_model,
     simulate_global_walk_forward,
-    simulate_with_global_model,
-    validate_simulation_dates,
+    simulate_with_global_model
 )
 from services.ml.global_training_service import GlobalTrainingJobs
 from services.ml.model_store_service import GLOBAL_MODEL_DIR, get_active_global_model, list_global_models
 import re
 from services.news_fetcher import NewsPreparationError
+from services.ml.data_preparation_service import validate_simulation_dates
 
 
 

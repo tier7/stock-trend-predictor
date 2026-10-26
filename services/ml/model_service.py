@@ -5,14 +5,14 @@ from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset
 from services.ml.walk_forward_service import (
     RETRAIN_INTERVAL,
     build_date_blocks,
-    evaluate,
     predict,
-    split_dataset_by_date,
-    train,
+    train
 )
 from services.simulator_service import (
     DEFAULT_CONFIDENCE_THRESHOLD, run_buy_and_hold, run_backtest, validate_confidence_threshold,
 )
+from services.ml.data_preparation_service import split_dataset_by_date
+from services.ml.evaluation_service import evaluate
 
 
 def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_blocks=None, *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):

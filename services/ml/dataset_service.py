@@ -73,7 +73,8 @@ def prepare_latest_features(data, feature_columns, *, feature_groups=("technical
 
     return latest
 
-def prepare_xy(data, feature_columns, config):
+def prepare_xy(data, feature_columns, config, *, require_both_classes=True):
+
     if data.empty:
         raise ValueError("Empty data")
     if not feature_columns:
@@ -91,6 +92,8 @@ def prepare_xy(data, feature_columns, config):
     x = data[feature_columns]
     y = data[config.target_column]
 
+
+
     if (not np.isfinite(x.to_numpy(dtype=float)).all() or not np.isfinite(y.to_numpy(dtype=float)).all()):
         raise ValueError("X and Y must contain only finite values")
 
@@ -98,7 +101,7 @@ def prepare_xy(data, feature_columns, config):
         if not y.isin([0, 1]).all():
             raise ValueError("y must contain only 0 and 1")
 
-        if y.nunique() != 2:
+        if require_both_classes and y.nunique() != 2:
             raise ValueError("Training data must contain both target classes 0 and 1.")
 
     return x, y

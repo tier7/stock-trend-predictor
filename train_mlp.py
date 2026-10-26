@@ -1,70 +1,121 @@
-import torch
-from sklearn.preprocessing import StandardScaler
-from torch.nn import BCEWithLogitsLoss
-from torch.utils.data import TensorDataset, DataLoader
+import argparse
+import math
 
-from services.ml.dataset_service import FEATURE_COLUMNS
-from services.ml.mlp_model import NeuralNetwork
-from services.ml.mlp_service import prepare_training_data,prepare_tensors,create_data_loaders,train_model, calculate_baseline_loss, evaluate_model
-from services.ml.global_forest_service import train_tickers
-from sklearn.preprocessing import StandardScaler
-from torch.utils.data import TensorDataset, DataLoader
-from services.ml.model_store_service import save_torch_model
+from services.ml.feature_schema import FEATURE_GROUPS
+from services.ml.mlp_service import train_mlp_model
+from services.ml.model_config import ModelConfig
+from services.news_fetcher import NewsPreparationError
 
-if __name__ == "__main__":
-    torch.manual_seed(26)
 
-    tickers = train_tickers
-    validation_start = "2025-01-01"
-    training_cutoff = "2026-01-01"
-
-    data, train_df, validation_df = prepare_training_data(tickers, validation_start, training_cutoff)
-    x_train, y_train, x_validation, y_validation, scaler = prepare_tensors(train_df, validation_df, FEATURE_COLUMNS)
-    train_loader, validation_loader = create_data_loaders(x_train, y_train, x_validation, y_validation)
-
-    model = NeuralNetwork(input_size=len(FEATURE_COLUMNS))
-    baseline_loss = calculate_baseline_loss(train_df, validation_df)
-    model, history, best_epoch = train_model(model, train_loader, validation_loader)
-
-    best_validation_loss = min(row["validation_loss"] for row in history)
-    evaluation = evaluate_model(model, validation_df, FEATURE_COLUMNS, scaler)
-    print(f"Baseline loss: {baseline_loss:.6f}")
-    print(f"MLP validation loss: {best_validation_loss:.6f}")
-    print(f"Best epoch: {best_epoch}")
-    print(f"Validation accuracy: {evaluation['accuracy']:.2%}")
-    print(f"Validation log loss: {evaluation['log_loss']:.6f}")
-
-    final_train_df = data[(data["date"] < training_cutoff)& (data["target_end_date"] <= training_cutoff)].copy()
-    final_scaler = StandardScaler()
-    x_final_scaled = final_scaler.fit_transform(final_train_df[FEATURE_COLUMNS])
-    x_final = torch.tensor(x_final_scaled, dtype=torch.float32)
-    y_final = torch.tensor(final_train_df["target"].to_numpy(), dtype=torch.float32).reshape(-1,1)
-    final_dataset = TensorDataset(x_final, y_final)
-    final_loader = DataLoader(final_dataset, batch_size=256, shuffle=True)
-
-    torch.manual_seed(26)
-    final_model = NeuralNetwork(input_size=len(FEATURE_COLUMNS))
-    final_model, final_history, _ = train_model(final_model, final_loader, epochs=best_epoch)
-
-    metadata = {
-        "architecture": "mlp",
-        "input_size": len(FEATURE_COLUMNS),
-        "hidden_sizes": [64, 32],
-        "feature_columns": list(FEATURE_COLUMNS),
-        "training_cutoff": training_cutoff,
-        "train_tickers": list(tickers),
-        "training_rows": len(final_train_df),
-        "epochs": best_epoch,
-        "selection_history": history,
-        "final_history": final_history,
-        "baseline_prediction": int(final_train_df["target"].mode().iloc[0]),
-    }
-
-    saved_metadata = save_torch_model(
-        final_model,
-        final_scaler,
-        metadata,
+def main():
+    parser = argparse.ArgumentParser(
+        description="Wytrenuj i zapisz globalny model MLP.",
+    )
+    parser.add_argument(
+        "--cutoff", required=True, metavar="YYYY-MM-DD",
+        help="Data graniczna danych treningowych.",
+    )
+    parser.add_argument(
+        "--validation-start", required=True, metavar="YYYY-MM-DD",
+        help="Początek okresu walidacji.",
+    )
+    parser.add_argument(
+        "--tickers", nargs="+", type=str.upper, required=True,
+        help="Lista spółek treningowych.",
+    )
+    parser.add_argument(
+        "--task", choices=("classification", "regression"),
+        default="classification",
+        help="Kierunek albo stopa zwrotu.",
+    )
+    parser.add_argument(
+        "--horizon", type=int, default=1,
+        help="Horyzont prognozy w sesjach giełdowych.",
+    )
+    parser.add_argument(
+        "--feature-groups", nargs="+", choices=tuple(FEATURE_GROUPS),
+        default=["technical"],
+        help="Grupy cech używane przez model.",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=50,
+        help="Maksymalna liczba epok podczas wyboru modelu.",
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=0.001,
+        help="Współczynnik uczenia optymalizatora Adam.",
+    )
+    parser.add_argument(
+        "--patience", type=int, default=5,
+        help="Liczba epok bez poprawy przed zatrzymaniem treningu.",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=256,
+        help="Liczba próbek w partii treningowej.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=26,
+        help="Ziarno losowości modelu i treningu.",
+    )
+    parser.add_argument(
+        "--news-start", metavar="YYYY-MM-DD",
+        help="Początek zakresu newsów.",
+    )
+    parser.add_argument(
+        "--news-end", metavar="YYYY-MM-DD",
+        help="Koniec zakresu newsów, bez wskazanego dnia.",
+    )
+    parser.add_argument(
+        "--prepared-news-only", action="store_true",
+        help="Korzystaj wyłącznie z zapisanych newsów i ocen FinBERT.",
+    )
+    parser.add_argument(
+        "--model-dir",
+        help="Opcjonalny katalog zapisu modeli MLP.",
     )
 
-    print(f"Saved model: {saved_metadata['model_id']}")
+    arguments = parser.parse_args()
+    try:
+        if arguments.epochs < 1 or arguments.patience < 1 or arguments.batch_size < 1:
+            raise ValueError("epochs, patience i batch-size muszą być dodatnie.")
+        if not math.isfinite(arguments.learning_rate) or arguments.learning_rate <= 0:
+            raise ValueError("learning-rate musi być skończoną, dodatnią liczbą.")
 
+        config = ModelConfig(
+            algorithm="mlp",
+            task=arguments.task,
+            horizon=arguments.horizon,
+            feature_groups=tuple(arguments.feature_groups),
+            random_state=arguments.seed,
+        )
+        metadata = train_mlp_model(
+            tickers=arguments.tickers,
+            validation_start=arguments.validation_start,
+            training_cutoff=arguments.cutoff,
+            config=config,
+            epochs=arguments.epochs,
+            learning_rate=arguments.learning_rate,
+            patience=arguments.patience,
+            batch_size=arguments.batch_size,
+            news_start=arguments.news_start,
+            news_end=arguments.news_end,
+            prepare_news=not arguments.prepared_news_only,
+            model_dir=arguments.model_dir,
+        )
+    except NewsPreparationError as error:
+        parser.exit(1, f"Nie udało się przygotować newsów: {error}\n")
+    except ValueError as error:
+        parser.error(str(error))
+
+    print(f"Zapisano model: {metadata['model_id']}")
+    print(f"Zadanie: {config.task}")
+    print(f"Horyzont: {config.horizon} sesji")
+    print(f"Data graniczna treningu: {metadata['training_cutoff']}")
+    print(f"Początek walidacji: {metadata['validation_start']}")
+    print(f"Grupy cech: {', '.join(config.feature_groups)}")
+    print(f"Liczba spółek: {len(metadata['train_tickers'])}")
+    print(f"Liczba epok treningu końcowego: {metadata['epochs']}")
+
+
+if __name__ == "__main__":
+    main()

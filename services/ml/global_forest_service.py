@@ -3,24 +3,26 @@ from datetime import date, datetime, timezone
 import sklearn
 
 from services.db import get_stock_data
+from services.ml.data_preparation_service import validate_training_cutoff, connect_data, validate_simulation_dates
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset, prepare_latest_features
 from services.ml.model_service import build_backtest_result
 from services.ml.model_store_service import load_global_model, save_global_model, get_model_config
 from services.ml.walk_forward_service import (
     RETRAIN_INTERVAL,
     build_date_blocks,
-    evaluate,
     predict,
-    split_dataset_by_date,
-    train,
+    train
 )
+from services.ml.evaluation_service import evaluate
 from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold
 from services.data_updater import ensure_stock_data
 from services.ml.model_config import ModelConfig
 from services.ml.feature_schema import get_feature_columns
-from services.ml.news_feature_service import NEWS_FEATURE_POLICY, get_latest_news_window
+from services.ml.news_feature_service import NEWS_FEATURE_POLICY, get_latest_news_window, normalize_training_news_range
 from services.news_fetcher import ensure_news_data
 from services.ml.finbert_service import FinbertAnalyzer
+from services.ml.data_preparation_service import split_dataset_by_date, prepare_prediction_data
+from services.ml.data_preparation_service import prepare_latest_prediction_data
 
 import pandas as pd
 
@@ -57,80 +59,6 @@ def split_dataset_by_tickers(data, train_tickers, test_tickers):
     test_df = data[data["ticker"].isin(test_tickers)]
     return train_df, test_df
 
-def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None, prepare_news=True):
-    datasets = []
-
-    uses_news = "news" in feature_groups
-    analyzer = None
-    news_as_of = None
-
-    if uses_news:
-        if news_start is None or news_end is None:
-            raise ValueError("News features require news_start and news_end")
-
-        if prepare_news:
-            analyzer = FinbertAnalyzer()
-            news_as_of = pd.Timestamp.now(tz="UTC")
-
-    for ticker in tickers:
-        if not ensure_stock_data(ticker, "1d"):
-            raise ValueError(f"Brak danych spółki {ticker}.")
-        data = get_stock_data(ticker,years=None)
-        if data.empty:
-            raise ValueError(f"Brak danych spółki {ticker} w bazie.")
-
-        ticker_news_start = news_start
-        ticker_news_end = news_end
-
-        if uses_news and prepare_news:
-            news_result = ensure_news_data(
-                ticker,
-                news_start,
-                news_end,
-                analyzer=analyzer,
-                as_of=news_as_of,
-                progress_callback=progress_callback,)
-
-            ticker_news_start = news_result["start_date"]
-            ticker_news_end = news_result["end_date"]
-
-        data = prepare_dataset(data, horizon=horizon, feature_columns=feature_columns, feature_groups=feature_groups, ticker=ticker, news_start=ticker_news_start, news_end=ticker_news_end)
-        if data.empty:
-            raise ValueError(f"Za mało danych do przygotowania cech spółki {ticker}.")
-        data["ticker"] = ticker
-        datasets.append(data)
-        if progress_callback:
-            progress_callback(f"Przygotowano dane {ticker} ({len(datasets)}/{len(tickers)}).")
-
-    combinedd = pd.concat(datasets, ignore_index=True)
-    return combinedd
-
-
-def validate_date(value, label):
-    try:
-        parsed = date.fromisoformat(value)
-        if parsed.isoformat() != value:
-            raise ValueError
-    except (TypeError, ValueError):
-        raise ValueError(f"{label}: podaj datę w formacie RRRR-MM-DD.")
-    return value
-
-
-def validate_training_cutoff(training_cutoff):
-    validate_date(training_cutoff, "Data graniczna uczenia")
-
-    if training_cutoff > date.today().isoformat():
-        raise ValueError("Data graniczna uczenia nie może być w przyszłości.")
-
-    return training_cutoff
-
-
-def validate_simulation_dates(start_date, end_date):
-    validate_date(start_date, "Początek symulacji")
-    validate_date(end_date, "Koniec symulacji")
-    if start_date >= end_date:
-        raise ValueError("Data końcowa musi być późniejsza od początkowej.")
-
 
 def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None, news_start=None, news_end=None, training_tickers=None, prepare_news = True):
     validate_training_cutoff(training_cutoff)
@@ -144,31 +72,11 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
         raise ValueError("Expected a global Random Forest configuration")
 
     if "news" in config.feature_groups:
-        if news_start is None or news_end is None:
-            raise ValueError("News features require news_start and news_end")
-
         if training_tickers is None:
-            raise ValueError("News features require an explicit list of training tickers")
+            raise ValueError(
+                "News features require an explicit list of training tickers")
 
-        range_start = pd.to_datetime(news_start, utc=True)
-        range_end = pd.to_datetime(news_end, utc=True)
-
-        if pd.isna(range_start) or pd.isna(range_end):
-            raise ValueError("News dates cannot be missing")
-
-        if range_start >= range_end:
-            raise ValueError("News start must be before news end")
-
-        cutoff = pd.to_datetime(training_cutoff, utc=True)
-        now = pd.Timestamp.now(tz="UTC")
-
-        range_end = min(range_end, cutoff, now)
-
-        if range_start >= range_end:
-            raise ValueError("No news range before the training cutoff")
-
-        news_start = range_start.isoformat()
-        news_end = range_end.isoformat()
+        news_start, news_end = normalize_training_news_range(news_start,news_end,training_cutoff)
 
     feature_columns = get_feature_columns(config.feature_groups)
 
@@ -224,6 +132,23 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
     return save_global_model(model, metadata, model_dir)
 
 
+def _predict_with_loaded_model(
+    data, model, metadata, config, start_date, end_date, *,
+    ticker=None, prepare_news=True, progress_callback=None,
+):
+    feature_columns = metadata["feature_columns"]
+
+    test_df = prepare_prediction_data(data,start_date,end_date,config,feature_columns,
+        metadata["training_cutoff"],ticker=ticker,prepare_news=prepare_news,progress_callback=progress_callback)
+
+
+    test_df = predict(model, test_df, feature_columns, config=config)
+    if config.task == "classification":
+        test_df["baseline_prediction"] = metadata["baseline_prediction"]
+
+    return test_df
+
+
 def predict_with_global_model(data, model_id, start_date, end_date, model_dir=None, *, ticker=None, prepare_news=True, progress_callback=None):
     validate_simulation_dates(start_date, end_date)
 
@@ -232,56 +157,33 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
 
     model, metadata = load_global_model(model_id, model_dir)
     config = get_model_config(metadata)
-    feature_columns = metadata["feature_columns"]
-
-    if start_date < metadata["training_cutoff"]:
-        raise ValueError(
-            f"Symulacja tym modelem może zaczynać się od {metadata['training_cutoff']}. "
-            "Dla wcześniejszego okresu wybierz model uczony na wcześniejszych danych."
-        )
-
-
-    news_start = start_date
-    news_end = end_date
-
-    if "news" in config.feature_groups:
-        if not ticker:
-            raise ValueError("News features require ticker")
-
-        if prepare_news:
-            news_result = ensure_news_data(
-                ticker,
-                news_start,
-                news_end,
-                progress_callback=progress_callback)
-
-            news_start = news_result["start_date"]
-            news_end = news_result["end_date"]
-
-
-    prepared = prepare_dataset(data, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups,ticker=ticker, news_start=news_start, news_end=news_end)
-    _, test_df = split_dataset_by_date(prepared, start_date, end_date)
-
-
-    if test_df.empty:
-        raise ValueError("Brak danych do symulacji w wybranym okresie.")
-
-    test_df = predict(model, test_df, feature_columns, config=config)
-    if config.task == "classification":
-        test_df["baseline_prediction"] = metadata["baseline_prediction"]
-
+    test_df = _predict_with_loaded_model(
+        data, model, metadata, config, start_date, end_date,
+        ticker=ticker, prepare_news=prepare_news,
+        progress_callback=progress_callback,
+    )
     return test_df, metadata
 
 
 def simulate_with_global_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir=None,*, prepare_news= True, progress_callback=None,ticker=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
 
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
-    results_df, metadata = predict_with_global_model(data, model_id, start_date, end_date, model_dir, ticker=ticker, prepare_news=prepare_news, progress_callback=progress_callback)
+    validate_simulation_dates(start_date, end_date)
+
+    if data.empty:
+        raise ValueError("Empty stock data")
+
+    model, metadata = load_global_model(model_id, model_dir)
     config = get_model_config(metadata)
 
     if config.task != "classification" or config.horizon != 1:
         raise ValueError(
             "Obecny symulator obsługuje klasyfikację z horyzontem 1 sesji.")
+    results_df = _predict_with_loaded_model(
+        data, model, metadata, config, start_date, end_date,
+        ticker=ticker, prepare_news=prepare_news,
+        progress_callback=progress_callback,
+    )
     result = build_backtest_result(
         results_df, start_date, end_date, initial_cash, fee_rate, metadata["training_rows"],
         confidence_threshold=confidence_threshold,
@@ -297,45 +199,17 @@ def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=N
     config = get_model_config(metadata)
     feature_columns = metadata["feature_columns"]
 
-    if data.empty:
-        raise ValueError("Empty stock data")
-
-    news_window = {}
-
-    if "news" in config.feature_groups:
-        if not ticker:
-            raise ValueError("News features require ticker")
-
-        latest_price_date = pd.to_datetime(data["date"]).max()
-
-        news_window = get_latest_news_window(latest_price_date,as_of=as_of)
-
-        if prepare_news:
-            news_result = ensure_news_data(
-                ticker,
-                news_window["news_start"],
-                news_window["news_end"],
-                refresh=True,
-                as_of=news_window["news_end"],
-                progress_callback=progress_callback)
-
-            news_window["news_start"] = news_result["start_date"]
-            news_window["news_end"] = news_result["end_date"]
-
-    latest = prepare_latest_features(
+    latest, news_window = prepare_latest_prediction_data(
         data,
+        config,
         feature_columns,
-        feature_groups=config.feature_groups,
+        metadata["training_cutoff"],
         ticker=ticker,
-        news_start=news_window.get("news_start"),
-        news_end=news_window.get("news_end"),
-    )
+        as_of=as_of,
+        prepare_news=prepare_news,
+        progress_callback=progress_callback)
 
     forecast_date = str(latest["date"].iloc[0])
-    if forecast_date < metadata["training_cutoff"]:
-        raise ValueError(
-            "Last session date is earlier than the model training cutoff."
-        )
 
     forecast = predict(model, latest, feature_columns, config=config).iloc[0]
 
