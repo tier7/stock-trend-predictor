@@ -4,6 +4,25 @@ from services.technical_indicator_service import calculate_all_indicators
 from services.ml.feature_schema import (TECHNICAL_FEATURE_COLUMNS as FEATURE_COLUMNS)
 from services.ml.feature_schema import get_feature_columns
 from services.ml.news_feature_service import attach_preopen_news_features
+import pandas as pd
+
+
+def add_calendar_features(data):
+    data = data.copy()
+    dates = pd.to_datetime(data["date"], errors="raise")
+
+    if dates.isna().any():
+        raise ValueError("Missing session dates")
+
+    day_of_week = dates.dt.dayofweek
+    month = dates.dt.month - 1
+
+    data["day_of_week_sin"] = np.sin(2 * np.pi * day_of_week / 7)
+    data["day_of_week_cos"] = np.cos(2 * np.pi * day_of_week / 7)
+    data["month_sin"] = np.sin(2 * np.pi * month / 12)
+    data["month_cos"] = np.cos(2 * np.pi * month / 12)
+
+    return data
 
 def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_start=None, news_end=None):
     get_feature_columns(feature_groups)
@@ -33,6 +52,8 @@ def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_st
             news_start,
             news_end,
         )
+    if "calendar" in feature_groups:
+        data = add_calendar_features(data)
 
     return data
 

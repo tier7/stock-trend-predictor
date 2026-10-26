@@ -11,19 +11,27 @@ TECHNICAL_FEATURE_COLUMNS = [
     "daily_return",
     "volatility_20",
     "momentum_10",
-    "volume_vs_avg",
+    "volume_vs_avg"
 ]
 
 NEWS_FEATURE_COLUMNS = [
     "news_count",
     "news_positive_mean",
     "news_negative_mean",
-    "news_neutral_mean",
+    "news_neutral_mean"
+]
+
+CALENDAR_FEATURE_COLUMNS = [
+    "day_of_week_sin",
+    "day_of_week_cos",
+    "month_sin",
+    "month_cos"
 ]
 
 FEATURE_GROUPS = {
     "technical": TECHNICAL_FEATURE_COLUMNS,
     "news": NEWS_FEATURE_COLUMNS,
+    "calendar": CALENDAR_FEATURE_COLUMNS
 }
 
 def get_feature_columns(feature_groups):
