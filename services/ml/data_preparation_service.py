@@ -8,7 +8,8 @@ from services.ml.dataset_service import prepare_dataset, prepare_latest_features
 from services.ml.finbert_service import FinbertAnalyzer
 from services.ml.news_feature_service import get_latest_news_window
 from services.news_fetcher import ensure_news_data
-
+from services.ml.feature_schema import get_feature_columns
+from services.ml.news_feature_service import normalize_training_news_range
 
 
 def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None, prepare_news=True):
@@ -160,3 +161,25 @@ def prepare_latest_prediction_data(data,config,feature_columns,training_cutoff, 
         raise ValueError("Last session date is earlier than the training cutoff")
 
     return latest, news_window
+
+def prepare_training_data(tickers, validation_start, training_cutoff, config, *, news_start=None, news_end=None, prepare_news=True):
+    validate_training_cutoff(training_cutoff)
+    validate_simulation_dates(validation_start, training_cutoff)
+
+    if config.scope != "global":
+        raise ValueError("Expected a global model configuration")
+
+    if "news" in config.feature_groups:
+        news_start, news_end = normalize_training_news_range(news_start,news_end,training_cutoff)
+
+    feature_columns = get_feature_columns(config.feature_groups)
+    data = connect_data(tickers, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups,news_start=news_start, news_end=news_end, prepare_news=prepare_news)
+    train_df, validation_df = split_dataset_by_date(data, validation_start, training_cutoff)
+
+    if train_df.empty or validation_df.empty:
+        raise ValueError("train_df and validation_df must not be empty")
+
+    print(f"Tickers: {len(tickers)}")
+    print(f"Train rows: {len(train_df)}")
+    print(f"Validation rows: {len(validation_df)}")
+    return data, train_df, validation_df

@@ -21,30 +21,8 @@ import pandas as pd
 from services.ml.data_preparation_service import prepare_latest_prediction_data
 from datetime import datetime, timezone
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
+from services.ml.data_preparation_service import prepare_training_data
 
-def prepare_training_data(tickers, validation_start, training_cutoff, config, *, news_start=None, news_end=None, prepare_news=True):
-    validate_training_cutoff(training_cutoff)
-    validate_simulation_dates(validation_start, training_cutoff)
-
-    if config.algorithm != "mlp":
-        raise ValueError("Invalid algorithm for mlp function")
-    if config.scope != "global":
-        raise ValueError("Invalid scope for mlp function")
-
-    if "news" in config.feature_groups:
-        news_start, news_end = normalize_training_news_range(news_start,news_end,training_cutoff)
-
-    feature_columns = get_feature_columns(config.feature_groups)
-    data = connect_data(tickers, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups,news_start=news_start, news_end=news_end, prepare_news=prepare_news)
-    train_df, validation_df = split_dataset_by_date(data, validation_start, training_cutoff)
-
-    if train_df.empty or validation_df.empty:
-        raise ValueError("train_df and validation_df must not be empty")
-
-    print(f"Tickers: {len(tickers)}")
-    print(f"Train rows: {len(train_df)}")
-    print(f"Validation rows: {len(validation_df)}")
-    return data, train_df, validation_df
 
 def prepare_tensors(train_df, validation_df, feature_columns, config):
 
@@ -288,6 +266,8 @@ def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,
     feature_columns = get_feature_columns(config.feature_groups)
     torch.manual_seed(config.random_state)
 
+    if config.algorithm != "mlp":
+        raise ValueError("Expected an MLP configuration")
     if "news" in config.feature_groups:
         news_start, news_end = normalize_training_news_range(
             news_start,

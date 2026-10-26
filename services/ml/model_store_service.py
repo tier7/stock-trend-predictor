@@ -5,33 +5,57 @@ from uuid import uuid4
 import torch
 from sklearn.base import is_classifier, is_regressor
 from services.ml.model_config import ModelConfig
-
 import joblib
-
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.feature_schema import get_feature_columns
 from services.ml.news_feature_service import NEWS_FEATURE_POLICY
 from services.ml.mlp_model import NeuralNetwork
-
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from lightgbm import LGBMClassifier, LGBMRegressor
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
-MODEL_ID_PATTERN = re.compile(r"global_forest_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
+
 TORCH_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "neural_networks")
 TORCH_MODEL_FORMAT_VERSION = 1
+LIGHTGBM_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "global_lightgbm")
+MODEL_ID_PATTERN = re.compile(r"(global_forest|global_lightgbm)_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
 
 
 def model_path(model_id, model_dir=None):
-    if not isinstance(model_id, str) or not MODEL_ID_PATTERN.fullmatch(model_id):
-        raise ValueError("Nieprawidłowy identyfikator modelu globalnego.")
+    if not isinstance(model_id, str):
+        raise ValueError("Invalid model ID")
 
-    return Path(model_dir or GLOBAL_MODEL_DIR) / f"{model_id}.joblib"
+    match = MODEL_ID_PATTERN.fullmatch(model_id)
+    if match is None:
+        raise ValueError("Invalid model ID")
+
+    default_dir = (
+        GLOBAL_MODEL_DIR
+        if match.group(1) == "global_forest"
+        else LIGHTGBM_MODEL_DIR
+    )
+
+    return Path(model_dir or default_dir) / f"{model_id}.joblib"
 
 
 def save_global_model(model, metadata, model_dir=None):
     metadata = dict(metadata)
-    metadata["model_id"] = f"global_forest_{metadata['training_cutoff']}_{uuid4().hex[:8]}"
+    config = get_model_config(metadata)
+
+    if (
+        config.algorithm not in ("random_forest", "lightgbm")
+        or config.scope != "global"):
+        raise ValueError("Expected a global tree model configuration")
+
+    prefix = (
+        "global_forest"
+        if config.algorithm == "random_forest"
+        else "global_lightgbm")
+
+    metadata["model_id"] = (f"{prefix}_{metadata['training_cutoff']}_{uuid4().hex[:8]}")
     metadata["format_version"] = MODEL_FORMAT_VERSION
+
     path = model_path(metadata["model_id"], model_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path = path.with_suffix(".json")
@@ -127,8 +151,21 @@ def load_global_model(model_id, model_dir=None):
 
 
 
-        if config.algorithm != "random_forest" or config.scope != "global":
+        if (config.algorithm not in ("random_forest", "lightgbm") or config.scope != "global"):
             raise ValueError("Incompatible model configuration")
+
+        expected_prefix = ("global_forest" if config.algorithm == "random_forest" else "global_lightgbm")
+
+        if not model_id.startswith(f"{expected_prefix}_"):
+            raise ValueError("Model ID does not match configured algorithm")
+
+        expected_types = (
+            (RandomForestClassifier, RandomForestRegressor)
+            if config.algorithm == "random_forest"
+            else (LGBMClassifier, LGBMRegressor))
+
+        if not isinstance(model, expected_types):
+            raise ValueError("Model type does not match configured algorithm")
 
         if config.task == "classification":
             if not is_classifier(model) or list(model.classes_) != [0, 1]:

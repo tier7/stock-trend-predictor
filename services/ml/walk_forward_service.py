@@ -1,4 +1,4 @@
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from services.ml.tree_model_service import create_tree_model, predict
 from services.ml.dataset_service import prepare_xy
 from services.ml.model_config import ModelConfig
 
@@ -30,34 +30,10 @@ def train(train_df, feature_columns, config= None):
 
     x_train, y_train = prepare_xy(train_df, feature_columns, config)
 
-    if config.task == "classification":
-        model = RandomForestClassifier(n_estimators=100, random_state=config.random_state)
-    elif config.task == "regression":
-        model = RandomForestRegressor(n_estimators=100, random_state=config.random_state)
+    model = create_tree_model(config)
 
     model.fit(x_train, y_train)
     return model
 
-def predict(model, data, feature_columns, config=None):
-    if config is None:
-        config = ModelConfig(
-            algorithm="random_forest",
-            task="classification",
-        )
-
-    x = data[feature_columns]
-    result = data.copy()
-
-    if config.task == "classification":
-        if not list(model.classes_) == [0, 1]:
-            raise ValueError("Invalid model classes")
-
-        result["prediction"] = model.predict(x)
-        result["probability_up"] = model.predict_proba(x)[:,1]
-
-    elif config.task == "regression":
-        result["predicted_return"] = model.predict(x)
-
-    return result
 
 
