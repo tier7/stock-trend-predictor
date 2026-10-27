@@ -28,10 +28,20 @@ CALENDAR_FEATURE_COLUMNS = [
     "month_cos"
 ]
 
+MARKET_FEATURE_COLUMNS = [
+    "market_return_1d",
+    "market_return_5d",
+    "market_volatility_20",
+    "market_price_vs_sma_20",
+    "vix_level",
+    "vix_change_1d"
+]
+
 FEATURE_GROUPS = {
     "technical": TECHNICAL_FEATURE_COLUMNS,
     "news": NEWS_FEATURE_COLUMNS,
-    "calendar": CALENDAR_FEATURE_COLUMNS
+    "calendar": CALENDAR_FEATURE_COLUMNS,
+    "market": MARKET_FEATURE_COLUMNS
 }
 
 def get_feature_columns(feature_groups):

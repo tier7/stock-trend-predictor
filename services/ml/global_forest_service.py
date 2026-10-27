@@ -18,7 +18,7 @@ from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_co
 from services.data_updater import ensure_stock_data
 from services.ml.model_config import ModelConfig
 from services.ml.feature_schema import get_feature_columns
-from services.ml.news_feature_service import NEWS_FEATURE_POLICY, get_latest_news_window, normalize_training_news_range
+from services.ml.news_feature_service import NEWS_FEATURE_POLICY, normalize_training_news_range
 from services.news_fetcher import ensure_news_data
 from services.ml.finbert_service import FinbertAnalyzer
 from services.ml.data_preparation_service import split_dataset_by_date, prepare_prediction_data

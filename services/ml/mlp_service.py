@@ -218,7 +218,7 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
     config = ModelConfig.from_dict(metadata["config"])
     feature_columns = metadata["feature_columns"]
 
-    latest, news_window = prepare_latest_prediction_data(
+    latest, prediction_window = prepare_latest_prediction_data(
         data,
         config,
         feature_columns,
@@ -239,11 +239,11 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
         "model_metadata": metadata,
     }
 
-    if news_window:
-        result["execution_date"] = news_window["execution_date"]
-        result["decision_at"] = news_window["decision_at"]
-        result["as_of"] = news_window["news_end"]
-        result["market_open"] = news_window["market_open"]
+    if prediction_window:
+        result["execution_date"] = prediction_window["execution_date"]
+        result["decision_at"] = prediction_window["decision_at"]
+        result["as_of"] = prediction_window["as_of"]
+        result["market_open"] = prediction_window["market_open"]
 
     if config.task == "classification":
         result["prediction"] = int(forecast["prediction"])
@@ -251,15 +251,14 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
     else:
         result["predicted_return"] = float(forecast["predicted_return"])
 
-    if news_window and as_of is None:
+    if prediction_window and as_of is None:
         completed_at = pd.Timestamp.now(tz="UTC")
-        market_open = pd.to_datetime(news_window["market_open"], utc=True)
+        market_open = pd.to_datetime(prediction_window["market_open"],utc=True)
 
         if completed_at >= market_open:
             raise ValueError(
                 "The market opened while preparing the forecast; "
                 "the upcoming-open decision is no longer available")
-
     return result
 
 def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,learning_rate=0.001,patience=5,batch_size=256,news_start=None,news_end=None, prepare_news=True,model_dir=None):

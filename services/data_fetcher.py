@@ -59,7 +59,34 @@ def fetch_company_name(ticker):
         return None
 
 
+def fetch_market_metadata(ticker):
+    ticker = ticker.strip().upper()
+
+    if not ticker:
+        raise ValueError("Ticker cannot be empty")
+
+    try:
+        metadata = yf.Ticker(ticker).get_history_metadata()
+    except Exception as error:
+        raise ValueError(f"{ticker}: could not fetch market metadata") from error
+
+    required_fields = (
+        "exchangeName",
+        "exchangeTimezoneName",
+        "instrumentType",
+        "currency")
+
+    missing_fields = [
+        field for field in required_fields
+        if not metadata.get(field)
+    ]
+
+    if missing_fields:
+        raise ValueError(f"{ticker}: missing market metadata: {missing_fields}")
+
+    return {field: metadata[field] for field in required_fields}
+
+
 if __name__ == "__main__":
-    df = fetch_stock_data("AAPL")
-    print(df.head())
-    print(df.tail())
+    for ticker in ("AAPL", "ALE.WA", "MC.PA"):
+        print(ticker, fetch_market_metadata(ticker))

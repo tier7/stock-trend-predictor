@@ -12,6 +12,8 @@ from services.ml.news_feature_service import NEWS_FEATURE_POLICY
 from services.ml.mlp_model import NeuralNetwork
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
+from copy import deepcopy
+from services.ml.market_feature_service import MARKET_FEATURE_POLICY
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
@@ -48,6 +50,10 @@ def save_global_model(model, metadata, model_dir=None):
         or config.scope != "global"):
         raise ValueError("Expected a global tree model configuration")
 
+    if "market" in config.feature_groups:
+        metadata.setdefault("market_policy",deepcopy(MARKET_FEATURE_POLICY))
+    validate_feature_policies(metadata, config)
+
     prefix = (
         "global_forest"
         if config.algorithm == "random_forest"
@@ -82,14 +88,13 @@ def list_global_models(model_dir=None):
         try:
             metadata = json.loads(path.read_text(encoding="utf-8"))
             config = get_model_config(metadata)
+            validate_feature_policies(metadata, config)
             expected_columns = get_feature_columns(config.feature_groups)
             if (
                 metadata["model_id"] == path.stem
                 and model_path(path.stem, directory).is_file()
                 and metadata["format_version"] == MODEL_FORMAT_VERSION
                 and metadata["feature_columns"] == expected_columns
-                and ("news" not in config.feature_groups
-                or metadata.get("news_policy") == NEWS_FEATURE_POLICY)
             ):
                 models.append(metadata)
         except (OSError, ValueError, KeyError, TypeError):
@@ -125,6 +130,15 @@ def get_model_config(metadata):
         random_state=metadata.get("random_state", 26),
     )
 
+def validate_feature_policies(metadata, config):
+    if "news" in config.feature_groups:
+        if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
+            raise ValueError("Incompatible news feature policy")
+
+    if "market" in config.feature_groups:
+        if metadata.get("market_policy") != MARKET_FEATURE_POLICY:
+            raise ValueError("Incompatible market feature policy")
+
 def load_global_model(model_id, model_dir=None):
     path = model_path(model_id, model_dir)
 
@@ -135,9 +149,7 @@ def load_global_model(model_id, model_dir=None):
         metadata = bundle["metadata"]
         model = bundle["model"]
         config = get_model_config(metadata)
-        if "news" in config.feature_groups:
-            if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
-                raise ValueError("Incompatible news feature policy")
+        validate_feature_policies(metadata, config)
         expected_columns = get_feature_columns(config.feature_groups)
         if (
             metadata["model_id"] != model_id
@@ -180,6 +192,10 @@ def load_global_model(model_id, model_dir=None):
 
 def save_torch_model(model, scaler, metadata, model_dir=None):
     metadata = dict(metadata)
+    config = ModelConfig.from_dict(metadata["config"])
+    if "market" in config.feature_groups:
+        metadata.setdefault("market_policy", deepcopy(MARKET_FEATURE_POLICY))
+
     metadata["format_version"] = TORCH_MODEL_FORMAT_VERSION
     metadata["model_id"] = (
         f"{metadata['architecture']}_"
@@ -238,10 +254,7 @@ def validate_torch_metadata(metadata):
 
     config = ModelConfig.from_dict(metadata["config"])
 
-
-    if "news" in config.feature_groups:
-        if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
-            raise ValueError("Incompatible news feature policy")
+    validate_feature_policies(metadata, config)
 
     if config.algorithm != "mlp":
         raise ValueError("Incompatible model configuration")

@@ -1,16 +1,15 @@
 import pandas as pd
-import pandas_market_calendars as mcal
 from services.db import (get_news_imports,get_news_without_sentiment,get_news_with_sentiment,)
 from services.ml.finbert_service import MODEL_NAME, MODEL_REVISION
 from services.news_fetcher import classify_news_relevance, find_missing_news_ranges
 from services.ml.feature_schema import NEWS_FEATURE_COLUMNS
-
+from services.ml.prediction_time_service import (DEFAULT_MARKET_CALENDAR,NEWS_MINUTES_BEFORE_OPEN,build_market_schedule,build_preopen_schedule)
 NEWS_FEATURE_POLICY = {
     "source": "alpaca",
     "model_name": MODEL_NAME,
     "model_revision": MODEL_REVISION,
-    "calendar_name": "NYSE",
-    "minutes_before_open": 5,
+    "calendar_name": DEFAULT_MARKET_CALENDAR,
+    "minutes_before_open": NEWS_MINUTES_BEFORE_OPEN,
     "window": "previous_close_to_preopen",
     "relevance_filter": "single_ticker",
 }
@@ -47,12 +46,6 @@ def prepare_news_dataframe(articles):
     data["available_at"] = data[["created_at", "updated_at"]].max(axis=1)
 
     return data.sort_values("available_at")
-
-def build_market_schedule(start_date, end_date, calendar_name=NEWS_FEATURE_POLICY["calendar_name"]):
-    calendar = mcal.get_calendar(calendar_name)
-
-    schedule = calendar.schedule(start_date=start_date, end_date=end_date)
-    return schedule
 
 
 def aggregate_news_by_session(assigned_news):
@@ -115,24 +108,6 @@ def load_scored_news_range(ticker, start_date, end_date):
 
     return news_df
 
-
-
-def build_preopen_schedule(schedule, minutes_before_open=NEWS_FEATURE_POLICY["minutes_before_open"]):
-    if not isinstance(minutes_before_open, int) or minutes_before_open <= 0:
-        raise ValueError("minutes_before_open must be a positive integer")
-    sessions = schedule.sort_index().copy()
-    sessions.index.name = "session_date"
-    dates = pd.Series(sessions.index.strftime("%Y-%m-%d"), index=sessions.index)
-    sessions["execution_date"] = dates
-    sessions["feature_date"] = dates.shift(1)
-    sessions["previous_close"] = sessions["market_close"].shift(1)
-    sessions["decision_at"] = sessions["market_open"].map(
-        lambda opening: opening - pd.DateOffset(minutes=minutes_before_open)
-    )
-
-    if (sessions["decision_at"] <= sessions["previous_close"]).any():
-        raise ValueError("Decision must fall after the previous market close")
-    return sessions.reset_index()
 
 
 def assign_news_to_preopen_sessions(news_df, sessions):
@@ -242,45 +217,4 @@ def attach_preopen_news_features(data,ticker,start_date,end_date,minutes_before_
         validate="one_to_one",
     )
 
-def get_latest_news_window(feature_date, as_of=None):
-    feature_date = pd.Timestamp(feature_date).strftime("%Y-%m-%d")
-    now = pd.Timestamp.now(tz="UTC")
-    as_of = (
-        now if as_of is None
-        else pd.to_datetime(as_of, utc=True)
-    )
 
-    if pd.isna(as_of):
-        raise ValueError("as_of cannot be missing")
-
-    if as_of > now:
-        raise ValueError("as_of cannot be in the future")
-
-    calendar_end = (pd.Timestamp(feature_date) + pd.DateOffset(days=14)).date().isoformat()
-
-    schedule = build_market_schedule(feature_date, calendar_end)
-    sessions = build_preopen_schedule(schedule)
-
-    matching = sessions.loc[sessions["feature_date"].eq(feature_date)]
-
-    if matching.empty:
-        raise ValueError("No market session matching the latest price date")
-
-    session = matching.iloc[0]
-
-    if as_of <= session["decision_at"]:
-        raise ValueError(
-            f"News forecast will be ready after {session['decision_at']}")
-
-    if as_of >= session["market_open"]:
-        raise ValueError(
-            "The entry session has already opened; "
-            "this is no longer an upcoming-open forecast")
-
-    return {
-        "news_start": session["previous_close"].isoformat(),
-        "news_end": as_of.isoformat(),
-        "execution_date": session["execution_date"],
-        "decision_at": session["decision_at"].isoformat(),
-        "market_open": session["market_open"].isoformat(),
-    }
