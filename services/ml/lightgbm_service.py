@@ -9,6 +9,7 @@ import lightgbm
 import sklearn
 from services.ml.model_store_service import save_global_model
 from services.ml.evaluation_service import calculate_baseline_loss
+from services.ml.sector_feature_service import extract_sector_benchmarks
 
 
 def train_model(train_df, feature_columns, config, *, validation_df=None, n_estimators=500, patience=20):
@@ -31,7 +32,7 @@ def train_model(train_df, feature_columns, config, *, validation_df=None, n_esti
 
     return model
 
-def train_lightgbm_model(tickers, validation_start, training_cutoff, *, config, n_estimators=500, patience=20, news_start=None, news_end=None, prepare_news=True, model_dir=None):
+def train_lightgbm_model(tickers, validation_start, training_cutoff, *, config, n_estimators=500, patience=20, news_start=None, news_end=None, prepare_news=True, model_dir=None, sector_assignments=None):
     if not config.algorithm == "lightgbm":
         raise ValueError("Incompatible algorithm")
     if not tickers:
@@ -40,7 +41,7 @@ def train_lightgbm_model(tickers, validation_start, training_cutoff, *, config, 
     feature_columns = get_feature_columns(config.feature_groups)
     if "news" in config.feature_groups:
         news_start, news_end = normalize_training_news_range(news_start, news_end, training_cutoff)
-    data, train_df, validation_df = prepare_training_data(tickers, validation_start, training_cutoff, config, news_start=news_start, news_end=news_end, prepare_news=prepare_news)
+    data, train_df, validation_df = prepare_training_data(tickers, validation_start, training_cutoff, config, news_start=news_start, news_end=news_end, prepare_news=prepare_news, sector_assignments=sector_assignments)
 
     final_train_df = data[(data["date"] < training_cutoff) & (data["target_end_date"] <= training_cutoff)].copy()
     missing_tickers = sorted(set(tickers) - set(final_train_df["ticker"]))
@@ -85,7 +86,8 @@ def train_lightgbm_model(tickers, validation_start, training_cutoff, *, config, 
         metadata["news_policy"] = NEWS_FEATURE_POLICY.copy()
         metadata["news_start"] = news_start
         metadata["news_end"] = news_end
-
+    if "sector" in config.feature_groups:
+        metadata["sector_benchmarks"] = extract_sector_benchmarks(final_train_df)
     if config.task == "classification":
         metadata["baseline_prediction"] = int(final_train_df["target"].mode().iloc[0])
         metadata["target_definition"] = (f"open(t+{config.horizon + 1}) > open(t+1)")

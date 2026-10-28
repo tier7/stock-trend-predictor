@@ -22,7 +22,7 @@ from services.ml.data_preparation_service import prepare_latest_prediction_data
 from datetime import datetime, timezone
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
 from services.ml.data_preparation_service import prepare_training_data
-
+from services.ml.sector_feature_service import extract_sector_benchmarks
 
 def prepare_tensors(train_df, validation_df, feature_columns, config):
 
@@ -160,13 +160,10 @@ def predict(model, data, feature_columns, scaler, config):
     return result
 
 
-def _predict_with_loaded_model(
-    data, model, scaler, metadata, config, start_date, end_date, *,
-    ticker=None, prepare_news=True, progress_callback=None,
-):
+def _predict_with_loaded_model(data, model, scaler, metadata, config, start_date, end_date, *,ticker=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     feature_columns = metadata["feature_columns"]
     test_df = prepare_prediction_data(data,start_date,end_date,config,feature_columns,
-        metadata["training_cutoff"],ticker=ticker,prepare_news=prepare_news,progress_callback=progress_callback)
+    metadata["training_cutoff"],ticker=ticker,prepare_news=prepare_news,progress_callback=progress_callback, sector_assignments=sector_assignments,saved_benchmarks=metadata.get("sector_benchmarks"))
 
     if config.task == "classification":
         test_df["baseline_prediction"] = metadata["baseline_prediction"]
@@ -174,7 +171,7 @@ def _predict_with_loaded_model(
     return predict(model, test_df, feature_columns, scaler, config)
 
 
-def predict_with_mlp_model(data,model_id,start_date,end_date,model_dir=None, *,ticker=None,prepare_news=True,progress_callback=None,):
+def predict_with_mlp_model(data,model_id,start_date,end_date,model_dir=None, *,ticker=None,prepare_news=True,progress_callback=None,sector_assignments=None):
     validate_simulation_dates(start_date, end_date)
 
     if data.empty:
@@ -185,12 +182,12 @@ def predict_with_mlp_model(data,model_id,start_date,end_date,model_dir=None, *,t
     test_df = _predict_with_loaded_model(
         data, model, scaler, metadata, config, start_date, end_date,
         ticker=ticker, prepare_news=prepare_news,
-        progress_callback=progress_callback,
+        progress_callback=progress_callback, sector_assignments=sector_assignments
     )
     return test_df, metadata
 
 
-def simulate_with_mlp_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir = None, *, ticker=None, prepare_news=True, progress_callback=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+def simulate_with_mlp_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir = None, *, ticker=None, prepare_news=True, progress_callback=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, sector_assignments=None):
     validate_simulation_dates(start_date, end_date)
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
 
@@ -206,14 +203,14 @@ def simulate_with_mlp_model(data, model_id, start_date, end_date, initial_cash, 
     test_df = _predict_with_loaded_model(
         data, model, scaler, metadata, config, start_date, end_date,
         ticker=ticker, prepare_news=prepare_news,
-        progress_callback=progress_callback,
+        progress_callback=progress_callback, sector_assignments=sector_assignments
     )
     result = build_backtest_result(test_df, start_date, end_date, initial_cash, fee_rate,metadata["training_rows"],confidence_threshold=confidence_threshold)
     result["model_type"] = "mlp"
     result["model_metadata"] = metadata
     return result
 
-def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None, as_of=None, prepare_news=True, progress_callback=None):
+def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None, as_of=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     model, scaler, metadata = load_torch_model(model_id, model_dir)
     config = ModelConfig.from_dict(metadata["config"])
     feature_columns = metadata["feature_columns"]
@@ -226,7 +223,7 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
         ticker=ticker,
         as_of=as_of,
         prepare_news=prepare_news,
-        progress_callback=progress_callback)
+        progress_callback=progress_callback, sector_assignments=sector_assignments, saved_benchmarks=metadata.get("sector_benchmarks"))
 
     forecast_date = str(latest["date"].iloc[0])
 
@@ -238,6 +235,9 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
         "horizon": config.horizon,
         "model_metadata": metadata,
     }
+
+    if "sector" in config.feature_groups:
+        result["sector_benchmark"] = latest["sector_benchmark"].iloc[0]
 
     if prediction_window:
         result["execution_date"] = prediction_window["execution_date"]
@@ -261,7 +261,7 @@ def predict_latest_with_mlp_model(data, model_id, model_dir=None, *,ticker=None,
                 "the upcoming-open decision is no longer available")
     return result
 
-def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,learning_rate=0.001,patience=5,batch_size=256,news_start=None,news_end=None, prepare_news=True,model_dir=None):
+def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,learning_rate=0.001,patience=5,batch_size=256,news_start=None,news_end=None, prepare_news=True,model_dir=None, sector_assignments=None):
     feature_columns = get_feature_columns(config.feature_groups)
     torch.manual_seed(config.random_state)
 
@@ -273,7 +273,7 @@ def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,
             news_end,
             training_cutoff)
 
-    data, train_df, validation_df = prepare_training_data(tickers, validation_start, training_cutoff, config,         news_start=news_start,news_end=news_end,prepare_news=prepare_news)
+    data, train_df, validation_df = prepare_training_data(tickers, validation_start, training_cutoff, config,         news_start=news_start,news_end=news_end,prepare_news=prepare_news, sector_assignments=sector_assignments)
     final_train_df = data[
         (data["date"] < training_cutoff)
         & (data["target_end_date"] <= training_cutoff)
@@ -351,7 +351,8 @@ def train_mlp_model(tickers,validation_start,training_cutoff,*,config,epochs=50,
         metadata["news_policy"] = NEWS_FEATURE_POLICY.copy()
         metadata["news_start"] = news_start
         metadata["news_end"] = news_end
-
+    if "sector" in config.feature_groups:
+        metadata["sector_benchmarks"] = extract_sector_benchmarks(final_train_df)
     if config.task == "classification":
         metadata["baseline_prediction"] = int(final_train_df["target"].mode().iloc[0])
     else:

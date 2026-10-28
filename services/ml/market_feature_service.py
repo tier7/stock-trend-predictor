@@ -105,37 +105,6 @@ def build_market_features(spy_data, vix_data):
 
     return features.reset_index()[["date"] + MARKET_FEATURE_COLUMNS]
 
-def attach_market_features(data, market_features):
-    if market_features is None or market_features.empty:
-        raise ValueError("Market features are required")
-
-    required_columns = ["date"] + MARKET_FEATURE_COLUMNS
-    missing_columns = [column for column in required_columns if column not in market_features.columns]
-
-    if missing_columns:
-        raise ValueError(f"Missing market feature columns: {missing_columns}")
-
-    features = market_features[required_columns].copy()
-    features["date"] = pd.to_datetime(features["date"], errors="raise").dt.normalize()
-
-    if features["date"].isna().any():
-        raise ValueError("Missing market feature dates")
-
-    if features["date"].duplicated().any():
-        raise ValueError("Duplicate market feature dates")
-
-    features = features.set_index("date")
-    stock_dates = pd.to_datetime(data["date"], errors="raise").dt.normalize()
-
-    if stock_dates.isna().any():
-        raise ValueError("Missing stock session dates")
-
-    result = data.copy()
-
-    for column in MARKET_FEATURE_COLUMNS:
-        result[column] = stock_dates.map(features[column])
-
-    return result
 
 def filter_completed_market_prices(data, source_name, calendar_name, as_of):
     prices = prepare_market_prices(data, source_name)

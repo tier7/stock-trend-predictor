@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
 from copy import deepcopy
 from services.ml.market_feature_service import MARKET_FEATURE_POLICY
+from services.ml.sector_feature_service import (SECTOR_FEATURE_POLICY, SECTOR_BENCHMARKS)
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
@@ -52,6 +53,8 @@ def save_global_model(model, metadata, model_dir=None):
 
     if "market" in config.feature_groups:
         metadata.setdefault("market_policy",deepcopy(MARKET_FEATURE_POLICY))
+    if "sector" in config.feature_groups:
+        metadata.setdefault("sector_policy", deepcopy(SECTOR_FEATURE_POLICY))
     validate_feature_policies(metadata, config)
 
     prefix = (
@@ -139,6 +142,24 @@ def validate_feature_policies(metadata, config):
         if metadata.get("market_policy") != MARKET_FEATURE_POLICY:
             raise ValueError("Incompatible market feature policy")
 
+    if "sector" in config.feature_groups:
+        if metadata.get("sector_policy") != SECTOR_FEATURE_POLICY:
+            raise ValueError("Incompatible sector feature policy")
+
+        benchmarks = metadata.get("sector_benchmarks")
+        training_tickers = metadata.get("train_tickers")
+
+        if not isinstance(benchmarks, dict) or not benchmarks:
+            raise ValueError("Missing sector benchmark mapping")
+        if (not isinstance(training_tickers, list) or not training_tickers or any(not isinstance(ticker, str) or not ticker.strip() for ticker in training_tickers)):
+            raise ValueError("Invalid training ticker list")
+
+        expected_tickers = {ticker.strip().upper() for ticker in training_tickers}
+        if set(benchmarks.keys()) != expected_tickers:
+            raise ValueError("Sector benchmark mapping must cover all training tickers")
+        if any(benchmark not in SECTOR_BENCHMARKS.values() for benchmark in benchmarks.values()):
+            raise ValueError("Unsupported sector benchmark")
+
 def load_global_model(model_id, model_dir=None):
     path = model_path(model_id, model_dir)
 
@@ -195,7 +216,8 @@ def save_torch_model(model, scaler, metadata, model_dir=None):
     config = ModelConfig.from_dict(metadata["config"])
     if "market" in config.feature_groups:
         metadata.setdefault("market_policy", deepcopy(MARKET_FEATURE_POLICY))
-
+    if "sector" in config.feature_groups:
+        metadata.setdefault("sector_policy", deepcopy(SECTOR_FEATURE_POLICY))
     metadata["format_version"] = TORCH_MODEL_FORMAT_VERSION
     metadata["model_id"] = (
         f"{metadata['architecture']}_"

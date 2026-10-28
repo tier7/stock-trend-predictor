@@ -6,14 +6,11 @@ from services.ml.model_service import build_backtest_result
 from services.ml.tree_model_service import predict
 from services.simulator_service import (DEFAULT_CONFIDENCE_THRESHOLD,validate_confidence_threshold)
 
-def _predict_with_loaded_model(
-    data, model, metadata, config, start_date, end_date, *,
-    ticker=None, prepare_news=True, progress_callback=None,
-):
+def _predict_with_loaded_model(data, model, metadata, config, start_date, end_date, *,ticker=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     feature_columns = metadata["feature_columns"]
 
     test_df = prepare_prediction_data(data,start_date,end_date,config,feature_columns,
-        metadata["training_cutoff"],ticker=ticker,prepare_news=prepare_news,progress_callback=progress_callback)
+        metadata["training_cutoff"],ticker=ticker,prepare_news=prepare_news,progress_callback=progress_callback, sector_assignments=sector_assignments,saved_benchmarks=metadata.get("sector_benchmarks"))
 
 
     test_df = predict(model, test_df, feature_columns, config=config)
@@ -23,7 +20,7 @@ def _predict_with_loaded_model(
     return test_df
 
 
-def predict_with_global_model(data, model_id, start_date, end_date, model_dir=None, *, ticker=None, prepare_news=True, progress_callback=None):
+def predict_with_global_model(data, model_id, start_date, end_date, model_dir=None, *, ticker=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     validate_simulation_dates(start_date, end_date)
 
     if data.empty:
@@ -34,12 +31,12 @@ def predict_with_global_model(data, model_id, start_date, end_date, model_dir=No
     test_df = _predict_with_loaded_model(
         data, model, metadata, config, start_date, end_date,
         ticker=ticker, prepare_news=prepare_news,
-        progress_callback=progress_callback,
+        progress_callback=progress_callback, sector_assignments=sector_assignments
     )
     return test_df, metadata
 
 
-def simulate_with_global_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir=None,*, prepare_news= True, progress_callback=None,ticker=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+def simulate_with_global_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir=None,*, prepare_news= True, progress_callback=None,ticker=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, sector_assignments=None):
 
     confidence_threshold = validate_confidence_threshold(confidence_threshold)
     validate_simulation_dates(start_date, end_date)
@@ -56,7 +53,7 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
     results_df = _predict_with_loaded_model(
         data, model, metadata, config, start_date, end_date,
         ticker=ticker, prepare_news=prepare_news,
-        progress_callback=progress_callback,
+        progress_callback=progress_callback, sector_assignments=sector_assignments
     )
     result = build_backtest_result(
         results_df, start_date, end_date, initial_cash, fee_rate, metadata["training_rows"],
@@ -68,7 +65,7 @@ def simulate_with_global_model(data, model_id, start_date, end_date, initial_cas
     return result
 
 
-def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=None, as_of=None, prepare_news=True, progress_callback=None):
+def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=None, as_of=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     model, metadata = load_global_model(model_id, model_dir)
     config = get_model_config(metadata)
     feature_columns = metadata["feature_columns"]
@@ -81,7 +78,7 @@ def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=N
         ticker=ticker,
         as_of=as_of,
         prepare_news=prepare_news,
-        progress_callback=progress_callback)
+        progress_callback=progress_callback, sector_assignments=sector_assignments, saved_benchmarks=metadata.get("sector_benchmarks"))
 
     forecast_date = str(latest["date"].iloc[0])
 
@@ -93,6 +90,9 @@ def predict_latest_with_global_model(data, model_id, model_dir=None, *, ticker=N
         "horizon": config.horizon,
         "model_metadata": metadata,
     }
+
+    if "sector" in config.feature_groups:
+        result["sector_benchmark"] = latest["sector_benchmark"].iloc[0]
 
     if prediction_window:
         result["execution_date"] = prediction_window["execution_date"]

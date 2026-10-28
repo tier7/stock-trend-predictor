@@ -37,11 +37,19 @@ MARKET_FEATURE_COLUMNS = [
     "vix_change_1d"
 ]
 
+SECTOR_FEATURE_COLUMNS = [
+    "sector_return_1d",
+    "sector_return_5d",
+    "relative_strength_5d",
+    "relative_strength_20d"
+]
+
 FEATURE_GROUPS = {
     "technical": TECHNICAL_FEATURE_COLUMNS,
     "news": NEWS_FEATURE_COLUMNS,
     "calendar": CALENDAR_FEATURE_COLUMNS,
-    "market": MARKET_FEATURE_COLUMNS
+    "market": MARKET_FEATURE_COLUMNS,
+    "sector": SECTOR_FEATURE_COLUMNS
 }
 
 def get_feature_columns(feature_groups):

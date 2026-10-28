@@ -54,7 +54,9 @@ def get_latest_prediction_window(feature_date, feature_groups, as_of=None):
 
     if uses_news:
         decision_at = session["decision_at"]
-
+    if "sector" in feature_groups:
+        sector_ready_at = session["previous_close"] + pd.Timedelta(minutes=MARKET_CLOSE_BUFFER_MINUTES)
+        decision_at = max(decision_at, sector_ready_at)
     if "market" in feature_groups:
         vix_schedule = build_market_schedule(feature_date, feature_date, calendar_name="CBOE_Index_Options")
 

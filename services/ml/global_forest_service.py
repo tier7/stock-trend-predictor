@@ -25,6 +25,7 @@ from services.ml.data_preparation_service import split_dataset_by_date, prepare_
 from services.ml.data_preparation_service import prepare_latest_prediction_data
 from services.ml.tree_prediction_service import (predict_with_global_model,simulate_with_global_model,predict_latest_with_global_model)
 import pandas as pd
+from services.ml.sector_feature_service import extract_sector_benchmarks
 
 tickers = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
@@ -60,7 +61,7 @@ def split_dataset_by_tickers(data, train_tickers, test_tickers):
     return train_df, test_df
 
 
-def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None, news_start=None, news_end=None, training_tickers=None, prepare_news = True):
+def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*, config=None, news_start=None, news_end=None, training_tickers=None, prepare_news = True, sector_assignments=None):
     validate_training_cutoff(training_cutoff)
     if config is None:
         config = ModelConfig(
@@ -86,7 +87,7 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
     if not selected_tickers:
         raise ValueError("Training tickers cannot be empty")
 
-    data = connect_data(selected_tickers, progress_callback=progress_callback, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups, news_start=news_start, news_end=news_end, prepare_news = prepare_news)
+    data = connect_data(selected_tickers, progress_callback=progress_callback, horizon=config.horizon, feature_columns=feature_columns, feature_groups=config.feature_groups, news_start=news_start, news_end=news_end, prepare_news = prepare_news, sector_assignments=sector_assignments)
     train_df = data[
         (data["date"] < training_cutoff) & (data["target_end_date"] <= training_cutoff)
     ]
@@ -116,6 +117,8 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
         metadata["news_policy"] = NEWS_FEATURE_POLICY.copy()
         metadata["news_start"] = news_start
         metadata["news_end"] = news_end
+    if "sector" in config.feature_groups:
+        metadata["sector_benchmarks"] = extract_sector_benchmarks(train_df)
     if config.task == "classification":
         metadata["baseline_prediction"] = int(
             train_df["target"].mode().iloc[0])
@@ -133,7 +136,6 @@ def train_global_model(training_cutoff, model_dir=None, progress_callback=None,*
 
 
 def predict_global_walk_forward(train_df, test_df, progress_callback=None):
-    """Fit a fresh forest for each block, using only labels known at its start."""
     if test_df.empty:
         raise ValueError("Brak danych do symulacji w wybranym okresie.")
     date_blocks = build_date_blocks(test_df, RETRAIN_INTERVAL)

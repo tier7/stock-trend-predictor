@@ -1,12 +1,10 @@
 import numpy as np
 
+from services.ml.news_feature_service import attach_preopen_news_features
 from services.technical_indicator_service import calculate_all_indicators
 from services.ml.feature_schema import (TECHNICAL_FEATURE_COLUMNS as FEATURE_COLUMNS)
-from services.ml.feature_schema import get_feature_columns
-from services.ml.news_feature_service import attach_preopen_news_features
 import pandas as pd
-from services.ml.market_feature_service import attach_market_features
-
+from services.ml.feature_schema import (get_feature_columns,MARKET_FEATURE_COLUMNS,SECTOR_FEATURE_COLUMNS)
 
 def add_calendar_features(data):
     data = data.copy()
@@ -25,7 +23,7 @@ def add_calendar_features(data):
 
     return data
 
-def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None):
+def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features=None):
     get_feature_columns(feature_groups)
     data = data.copy()
     data = data.sort_values("date")
@@ -45,28 +43,26 @@ def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_st
         data["volume_vs_avg"] = data["volume"] / avg_volume
     if "news" in feature_groups:
         if not ticker or news_start is None or news_end is None:
-            raise ValueError("News features require ticker, news_start and news_end")
-
-        data = attach_preopen_news_features(
-            data,
-            ticker,
-            news_start,
-            news_end,
-        )
+            raise ValueError(
+                "News features require ticker, news_start and news_end")
+        data = attach_preopen_news_features(data,ticker,news_start,news_end,)
+    if "market" in feature_groups:
+        data = attach_features_by_date(data,market_features,MARKET_FEATURE_COLUMNS)
+    if "sector" in feature_groups:
+        data = attach_features_by_date(data,sector_features,SECTOR_FEATURE_COLUMNS)
     if "calendar" in feature_groups:
         data = add_calendar_features(data)
-    if "market" in feature_groups:
-        data = attach_market_features(data, market_features)
+
     return data
 
 
-def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None):
+def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features=None):
     if type(horizon) is not int or horizon < 1:
         raise ValueError("Horizon must be a positive integer")
     if feature_columns is None:
         feature_columns = get_feature_columns(feature_groups)
 
-    data = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features)
+    data = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features, sector_features=sector_features)
 
     data["next_close"] = data["close"].shift(-1)
     data["next_open"] = data["open"].shift(-1)
@@ -83,11 +79,11 @@ def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("t
 
     return data
 
-def prepare_latest_features(data, feature_columns, *, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None):
+def prepare_latest_features(data, feature_columns, *, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features = None):
     if data.empty:
         raise ValueError("Empty data")
 
-    features_df = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features)
+    features_df = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features, sector_features=sector_features)
 
     latest = features_df.iloc[[-1]].copy()
 
@@ -128,3 +124,35 @@ def prepare_xy(data, feature_columns, config, *, require_both_classes=True):
             raise ValueError("Training data must contain both target classes 0 and 1.")
 
     return x, y
+
+def attach_features_by_date(data, features_df, feature_columns):
+    if features_df is None or features_df.empty:
+        raise ValueError("Feature data is required")
+
+    required_columns = ["date"] + list(feature_columns)
+    missing_columns = [column for column in required_columns if column not in features_df.columns]
+
+    if missing_columns:
+        raise ValueError(f"Missing feature columns: {missing_columns}")
+
+    features = features_df[required_columns].copy()
+    features["date"] = pd.to_datetime(features["date"],errors="raise").dt.normalize()
+
+    if features["date"].isna().any():
+        raise ValueError("Missing feature dates")
+    if features["date"].duplicated().any():
+        raise ValueError("Duplicate feature dates")
+
+    features = features.set_index("date")
+    stock_dates = pd.to_datetime(data["date"],errors="raise").dt.normalize()
+
+    if stock_dates.isna().any():
+        raise ValueError("Missing stock session dates")
+
+    result = data.copy()
+
+    for column in feature_columns:
+        result[column] = stock_dates.map(features[column])
+
+    return result
+
