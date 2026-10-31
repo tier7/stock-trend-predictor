@@ -331,7 +331,7 @@ def score_pending_news(
     inserted_count += save_sentiment(results, MODEL_NAME, MODEL_REVISION)
     return inserted_count
 
-def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False,as_of=None,progress_callback=None):
+def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False,as_of=None,progress_callback=None, history_start=None):
     ticker = ticker.upper()
 
     if progress_callback:
@@ -343,8 +343,22 @@ def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False
         end_date,
         as_of=as_of,
         refresh=refresh,
-        progress_callback=progress_callback,
-    )
+        progress_callback=progress_callback)
+
+    history_import = None
+    if history_start is not None:
+        history_from = pd.to_datetime(history_start, utc=True)
+        requested_from = pd.to_datetime(start_date, utc=True)
+        if (pd.isna(history_from) or pd.isna(requested_from) or history_from >= requested_from):
+            raise ValueError("Invalid news history start")
+
+        history_import = import_news_range(
+            ticker,
+            history_from.isoformat(),
+            requested_from.isoformat(),
+            as_of=as_of,
+            refresh=False,
+            progress_callback=progress_callback)
 
     if analyzer is None:
         analyzer = FinbertAnalyzer()
@@ -355,9 +369,9 @@ def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False
     sentiments_inserted = score_pending_news(
         ticker,
         analyzer,
-        start_date=import_result["start_date"],
+        start_date=(history_import["start_date"] if history_import is not None else import_result["start_date"]),
         end_date=import_result["end_date"],
-        progress_callback=progress_callback,
+        progress_callback=progress_callback
     )
 
     if progress_callback:
@@ -368,7 +382,9 @@ def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False
         "start_date": import_result["start_date"],
         "end_date": import_result["end_date"],
         "import": import_result,
-        "sentiments_inserted": sentiments_inserted
+        "sentiments_inserted": sentiments_inserted,
+        "history_start": (history_import["start_date"] if history_import is not None else None),
+        "history_import": history_import
     }
 if __name__ == "__main__":
     create_tables()

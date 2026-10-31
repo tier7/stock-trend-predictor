@@ -14,11 +14,22 @@ TECHNICAL_FEATURE_COLUMNS = [
     "volume_vs_avg"
 ]
 
-NEWS_FEATURE_COLUMNS = [
+NEWS_BASE_FEATURE_COLUMNS = [
     "news_count",
     "news_positive_mean",
     "news_negative_mean",
     "news_neutral_mean"
+]
+
+NEWS_FEATURE_COLUMNS = [
+    "news_count",
+    "news_positive_mean",
+    "news_negative_mean",
+    "news_neutral_mean",
+    "news_count_5d",
+    "news_active_sessions_5d",
+    "news_sentiment_5d",
+    "news_sentiment_change"
 ]
 
 CALENDAR_FEATURE_COLUMNS = [

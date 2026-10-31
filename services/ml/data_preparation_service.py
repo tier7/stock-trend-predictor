@@ -8,12 +8,12 @@ from services.ml.dataset_service import prepare_dataset, prepare_latest_features
 from services.ml.finbert_service import FinbertAnalyzer
 from services.news_fetcher import ensure_news_data
 from services.ml.feature_schema import get_feature_columns
-from services.ml.news_feature_service import normalize_training_news_range
 from services.ml.market_feature_service import build_market_features, filter_completed_market_prices
 from services.ml.prediction_time_service import get_latest_prediction_window
 from services.data_fetcher import fetch_market_metadata
 from services.ml.market_feature_service import validate_market_metadata
 from services.ml.sector_feature_service import (resolve_sector_benchmarks,build_sector_features)
+from services.ml.news_feature_service import normalize_training_news_range, get_news_history_start
 
 def load_context_prices(source_calendars, progress_callback=None, *, as_of=None,):
     if not source_calendars:
@@ -105,9 +105,11 @@ def connect_data(tickers, progress_callback=None, *, horizon=1,feature_columns=N
         ticker_news_end = news_end
 
         if uses_news and prepare_news:
-            news_result = ensure_news_data(ticker,news_start, news_end,analyzer=analyzer,as_of=snapshot_at,progress_callback=progress_callback)
+            history_start = get_news_history_start(news_start, news_end)
+            news_result = ensure_news_data(ticker, news_start, news_end, analyzer=analyzer, as_of=snapshot_at, progress_callback=progress_callback, history_start=history_start)
             ticker_news_start = news_result["start_date"]
             ticker_news_end = news_result["end_date"]
+
 
         sector_features = None
 
@@ -186,9 +188,11 @@ def prepare_prediction_data(data, start_date, end_date, config, feature_columns,
         if not ticker:
             raise ValueError("News features require ticker")
         if prepare_news == True:
-            news_info = ensure_news_data(ticker, news_start, news_end, progress_callback=progress_callback)
+            history_start = get_news_history_start(news_start, news_end)
+            news_info = ensure_news_data(ticker, news_start, news_end, progress_callback=progress_callback, history_start=history_start)
             news_start = news_info["start_date"]
             news_end = news_info["end_date"]
+
 
     uses_market = "market" in config.feature_groups
     uses_sector = "sector" in config.feature_groups
@@ -290,7 +294,14 @@ def prepare_latest_prediction_data(data, config, feature_columns, training_cutof
         news_end = prediction_window["as_of"]
 
         if prepare_news:
-            news_result = ensure_news_data(ticker, news_start, news_end, refresh=True, as_of=prediction_window["as_of"], progress_callback=progress_callback)
+            history_start = get_news_history_start(news_start, news_end)
+            news_result = ensure_news_data(
+                ticker, news_start, news_end,
+                refresh=True,
+                as_of=prediction_window["as_of"],
+                progress_callback=progress_callback,
+                history_start=history_start
+            )
             news_start = news_result["start_date"]
             news_end = news_result["end_date"]
 
