@@ -5,9 +5,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from services.ml import global_forest_service, model_service
+from services.ml import model_service, walk_forward_service, experiment_service
+from services.ml.evaluation_service import evaluate
 from services.ml.dataset_service import FEATURE_COLUMNS
-from services.ml.walk_forward_service import build_date_blocks, train
+from services.ml.walk_forward_service import build_date_blocks
+from services.ml.tree_model_service import fit as train
 
 
 def prepared_data(ticker, test_dates):
@@ -49,36 +51,31 @@ def shared_experiment(monkeypatch):
     test_df = combined[combined["date"] >= "2025-01-01"]
     date_blocks = build_date_blocks(test_df, 2)
 
-    monkeypatch.setattr(model_service, "prepare_dataset", lambda data: data.copy())
-    monkeypatch.setattr(global_forest_service, "connect_data", lambda tickers: combined.copy())
-    monkeypatch.setattr(global_forest_service, "tickers", ["AAPL", "NVDA"])
-    monkeypatch.setattr(global_forest_service, "train_tickers", ["AAPL"])
-    monkeypatch.setattr(global_forest_service, "test_tickers", ["NVDA"])
-    monkeypatch.setattr(global_forest_service, "RETRAIN_INTERVAL", 2)
+    monkeypatch.setattr(walk_forward_service, "prepare_dataset", lambda data: data.copy())
+    monkeypatch.setattr(experiment_service, "connect_data", lambda tickers: combined.copy())
+    monkeypatch.setattr(experiment_service, "DEFAULT_TRAINING_TICKERS", ("AAPL",))
+    monkeypatch.setattr(experiment_service, "UNSEEN_TICKERS", ("NVDA",))
+    monkeypatch.setattr(experiment_service, "RETRAIN_INTERVAL", 2)
     return stock, date_blocks
 
 
 def test_local_and_global_share_training_cutoffs_and_predictions(monkeypatch, shared_experiment):
     stock, date_blocks = shared_experiment
-    global_training = []
-    local_training = []
+    training_frames = []
+    original_fit = model_service.fit_model
 
-    def global_train(frame, features):
-        global_training.append(frame.copy())
-        return train(frame, features)
+    def capture_train(frame, features, config):
+        training_frames.append(frame.copy())
+        return original_fit(frame, features, config)
 
-    def local_train(frame, features):
-        local_training.append(frame.copy())
-        return train(frame, features)
-
-    monkeypatch.setattr(global_forest_service, "train", global_train)
-    monkeypatch.setattr(model_service, "train", local_train)
-
-    seen, unseen = global_forest_service.run_experiment("2025-01-01", "2025-01-31")
-    local_result = model_service.train_and_predict(
-        stock, "2025-01-01", "2025-01-31", 10000, 0.001,
-        date_blocks=date_blocks,
+    monkeypatch.setattr(walk_forward_service, "fit_model", capture_train)
+    seen, unseen = experiment_service.run_experiment("2025-01-01", "2025-01-31")
+    global_training = training_frames.copy()
+    training_frames.clear()
+    local_result = walk_forward_service.train_and_predict(
+        stock, "2025-01-01", "2025-01-31", 10000, 0.001, date_blocks=date_blocks
     )
+    local_training = training_frames
 
     assert len(global_training) == len(local_training) == len(date_blocks)
     for global_frame, local_frame, block_dates in zip(global_training, local_training, date_blocks):
@@ -92,13 +89,11 @@ def test_local_and_global_share_training_cutoffs_and_predictions(monkeypatch, sh
     records = local_result["predictions"]
     assert [record["date"] for record in records] == seen["date"].tolist()
     assert [record["prediction"] for record in records] == seen["prediction"].tolist()
-    np.testing.assert_allclose(
-        [record["probability_up"] for record in records], seen["probability_up"],
-    )
+    np.testing.assert_allclose([record["probability_up"] for record in records], seen["probability_up"])
     assert set(unseen["ticker"]) == {"NVDA"}
     assert len(seen) == 4
     assert len(unseen) == 5
-    assert local_result["accuracy"] == global_forest_service.evaluate(seen)["accuracy"]
+    assert local_result["accuracy"] == evaluate(seen)["accuracy"]
     json.dumps(local_result)
 
 
@@ -118,8 +113,8 @@ def test_local_keeps_predictions_from_each_block_for_backtest(monkeypatch, share
         def predict_proba(self, features):
             return np.tile([1 - self.probability_up, self.probability_up], (len(features), 1))
 
-    monkeypatch.setattr(model_service, "train", lambda frame, features: FixedForest(next(probabilities)))
-    result = model_service.train_and_predict(
+    monkeypatch.setattr(walk_forward_service, "fit_model", lambda frame, features, config: (FixedForest(next(probabilities)), None, {}))
+    result = walk_forward_service.train_and_predict(
         stock, "2025-01-01", "2025-01-31", 10000, 0,
         date_blocks=date_blocks,
         confidence_threshold=threshold,
@@ -136,12 +131,12 @@ def test_local_keeps_predictions_from_each_block_for_backtest(monkeypatch, share
 def test_local_rejects_incomplete_shared_schedule_before_training(monkeypatch, shared_experiment):
     stock, _ = shared_experiment
 
-    def unexpected_train(frame, features):
+    def unexpected_train(frame, features, config):
         pytest.fail("An incomplete schedule must be rejected before training")
 
-    monkeypatch.setattr(model_service, "train", unexpected_train)
+    monkeypatch.setattr(walk_forward_service, "fit_model", unexpected_train)
     with pytest.raises(ValueError, match="cover all test dates"):
-        model_service.train_and_predict(
+        walk_forward_service.train_and_predict(
             stock, "2025-01-01", "2025-01-31", 10000, 0,
             date_blocks=[["2025-01-03"]],
         )
@@ -168,7 +163,7 @@ def test_local_runs_from_raw_prices_through_indicators_and_backtest():
         "volume": 1000 + positions % 11 * 100,
     })
 
-    result = model_service.train_and_predict(
+    result = walk_forward_service.train_and_predict(
         prices, dates[180].strftime("%Y-%m-%d"), dates[209].strftime("%Y-%m-%d"),
         10000, 0.001,
     )

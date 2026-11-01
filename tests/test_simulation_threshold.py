@@ -77,7 +77,7 @@ def test_api_passes_default_or_selected_threshold_to_each_simulator(client, monk
     monkeypatch.setattr(app_module, "ensure_stock_data", lambda *args: True)
     monkeypatch.setattr(app_module, "get_stock_data", lambda *args: pd.DataFrame({"close": [100, 101]}))
     service_name = {
-        "local": "train_and_predict", "global": "simulate_with_global_model",
+        "local": "train_and_predict", "global": "simulate_model",
         "walk_forward": "simulate_global_walk_forward",
     }[mode]
 

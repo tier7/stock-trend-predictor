@@ -7,16 +7,17 @@ import pandas as pd
 import pytest
 
 import app as app_module
-from services.ml import global_forest_service as global_service
+from services.ml import walk_forward_service as global_service
 from services.ml import global_training_service
+from services.ml import model_service as training_service
+from services.ml import data_preparation_service
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset, prepare_features
 from services.ml.global_training_service import GlobalTrainingJobs
 from services.ml import model_store_service
 from services.ml.model_store_service import list_global_models, load_global_model, save_global_model
-from services.ml.walk_forward_service import train
+from services.ml.tree_model_service import fit as train
 
 
-# joblib 1.5.3 restores tree arrays correctly, but uses an API deprecated in NumPy 2.5.
 pytestmark = pytest.mark.filterwarnings(
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning:joblib.numpy_pickle"
 )
@@ -46,16 +47,17 @@ def training_data(monkeypatch, prices):
         fetched_tickers.append(ticker)
         return prices.copy()
 
-    monkeypatch.setattr(global_service, "train_tickers", ["AAPL", "MSFT"])
-    monkeypatch.setattr(global_service, "ensure_stock_data", lambda ticker, interval: True)
-    monkeypatch.setattr(global_service, "get_stock_data", get_stock_data)
+    monkeypatch.setattr(global_service, "DEFAULT_TRAINING_TICKERS", ("AAPL", "MSFT"))
+    monkeypatch.setattr(training_service, "DEFAULT_TRAINING_TICKERS", ("AAPL", "MSFT"))
+    monkeypatch.setattr(data_preparation_service, "ensure_stock_data", lambda ticker, interval: True)
+    monkeypatch.setattr(data_preparation_service, "get_stock_data", get_stock_data)
     return fetched_tickers
 
 
 @pytest.fixture
 def saved_model(tmp_path, prices, training_data):
     cutoff = prices["date"].iloc[180]
-    return global_service.train_global_model(cutoff, tmp_path)
+    return training_service.train_model(cutoff, tmp_path)
 
 
 def test_training_persists_only_mature_samples_from_training_tickers(
@@ -64,12 +66,14 @@ def test_training_persists_only_mature_samples_from_training_tickers(
     cutoff = prices["date"].iloc[180]
     training_frames = []
 
-    def capture_train(frame, features):
-        training_frames.append(frame.copy())
-        return train(frame, features)
+    original_fit = training_service.fit_model
 
-    monkeypatch.setattr(global_service, "train", capture_train)
-    metadata = global_service.train_global_model(cutoff, tmp_path)
+    def capture_train(frame, features, config, **kwargs):
+        training_frames.append(frame.copy())
+        return original_fit(frame, features, config, **kwargs)
+
+    monkeypatch.setattr(training_service, "fit_model", capture_train)
+    metadata = training_service.train_model(cutoff, tmp_path)
     frame = training_frames[0]
     assert training_data == ["AAPL", "MSFT"]
     assert set(frame["ticker"]) == {"AAPL", "MSFT"}
@@ -88,15 +92,15 @@ def test_training_persists_only_mature_samples_from_training_tickers(
 def test_saved_model_simulates_and_predicts_latest_without_training(
     monkeypatch, tmp_path, prices, saved_model,
 ):
-    monkeypatch.setattr(global_service, "train", lambda *args: pytest.fail("Inference must not train"))
+    monkeypatch.setattr(training_service, "fit_model", lambda *args: pytest.fail("Inference must not train"))
     parameters = (
         prices, saved_model["model_id"], prices["date"].iloc[200], prices["date"].iloc[229],
         10000, 0.001, tmp_path,
     )
-    result = global_service.simulate_with_global_model(*parameters)
-    repeated = global_service.simulate_with_global_model(*parameters)
+    result = training_service.simulate_model(*parameters)
+    repeated = training_service.simulate_model(*parameters)
     assert result == repeated
-    stricter = global_service.simulate_with_global_model(*parameters, confidence_threshold=0.85)
+    stricter = training_service.simulate_model(*parameters, confidence_threshold=0.85)
     assert stricter["predictions"] == result["predictions"]
     assert stricter["accuracy"] == result["accuracy"]
     assert stricter["buyandhold_summary"] == result["buyandhold_summary"]
@@ -108,7 +112,7 @@ def test_saved_model_simulates_and_predicts_latest_without_training(
     assert len(result["model_summary"]["equity_history"]) == 29
     assert result["model_metadata"] == saved_model
     assert sum(result["confusion_matrix"].values()) == 28
-    latest = global_service.predict_latest_with_global_model(prices, saved_model["model_id"], tmp_path)
+    latest = training_service.predict_latest(prices, saved_model["model_id"], tmp_path)
     assert latest["date"] == prices["date"].iloc[-1]
     assert 0 <= latest["probability_up"] <= 1
     assert latest["prediction"] in [0, 1]
@@ -133,7 +137,7 @@ def test_active_model_api_selects_ready_version_without_loading_or_training(
     monkeypatch.setitem(app_module.app.config, "GLOBAL_MODEL_DIR", tmp_path)
     monkeypatch.setitem(app_module.app.config, "GLOBAL_MODEL_ID", selected_id)
     monkeypatch.setattr(model_store_service.joblib, "load", lambda *args: pytest.fail("Only metadata is needed"))
-    monkeypatch.setattr(global_service, "train", lambda *args: pytest.fail("Selecting a model must not train"))
+    monkeypatch.setattr(training_service, "fit_model", lambda *args: pytest.fail("Selecting a model must not train"))
     monkeypatch.setattr(app_module, "ensure_stock_data", lambda *args: pytest.fail("No stock data is needed"))
     response = client.get("/api/models/global/active")
     if selection == "missing":
@@ -148,7 +152,7 @@ def test_active_model_api_selects_ready_version_without_loading_or_training(
 def test_active_model_api_reports_missing_model_without_starting_training(client, monkeypatch, tmp_path):
     monkeypatch.setitem(app_module.app.config, "GLOBAL_MODEL_DIR", tmp_path)
     monkeypatch.setitem(app_module.app.config, "GLOBAL_MODEL_ID", None)
-    monkeypatch.setattr(global_service, "train", lambda *args: pytest.fail("Missing model must not trigger training"))
+    monkeypatch.setattr(training_service, "fit_model", lambda *args: pytest.fail("Missing model must not trigger training"))
     response = client.get("/api/models/global/active")
     assert response.status_code == 404
     assert "model lokalny" in response.get_json()["error"]
@@ -157,9 +161,9 @@ def test_active_model_api_reports_missing_model_without_starting_training(client
 def test_historical_simulation_rejects_overlap_before_prediction(
     monkeypatch, tmp_path, prices, saved_model,
 ):
-    monkeypatch.setattr(global_service, "prepare_dataset", lambda data: pytest.fail("Reject overlap first"))
-    with pytest.raises(ValueError, match="może zaczynać się od"):
-        global_service.predict_with_global_model(
+    monkeypatch.setattr(data_preparation_service, "prepare_dataset", lambda *args, **kwargs: pytest.fail("Reject overlap first"))
+    with pytest.raises(ValueError, match="evaluation"):
+        training_service.predict_history(
             prices, saved_model["model_id"], prices["date"].iloc[179], prices["date"].iloc[229], tmp_path,
         )
 
@@ -179,12 +183,12 @@ def test_latest_rejects_missing_features_instead_of_using_older_session(tmp_path
     incomplete = prices.copy()
     incomplete.loc[incomplete.index[-1], "close"] = np.nan
     with pytest.raises(ValueError, match="No complete features"):
-        global_service.predict_latest_with_global_model(incomplete, saved_model["model_id"], tmp_path)
+        training_service.predict_latest(incomplete, saved_model["model_id"], tmp_path)
 
 
 @pytest.mark.parametrize("model_id", ["../other", "C:\\other.joblib", "", None])
 def test_model_id_cannot_select_arbitrary_file(tmp_path, model_id):
-    with pytest.raises(ValueError, match="identyfikator"):
+    with pytest.raises(ValueError, match="model ID"):
         load_global_model(model_id, tmp_path)
 
 
@@ -192,7 +196,7 @@ def test_failed_training_does_not_remove_saved_version(monkeypatch, tmp_path, sa
     def fail_training(*args):
         raise ValueError("Brak próbek treningowych.")
 
-    monkeypatch.setattr(global_training_service, "train_global_model", fail_training)
+    monkeypatch.setattr(global_training_service, "train_model", fail_training)
     jobs = GlobalTrainingJobs()
     jobs.start(saved_model["training_cutoff"], tmp_path)
     jobs._thread.join(timeout=10)
@@ -211,7 +215,7 @@ def test_duplicate_training_is_rejected_while_job_runs(monkeypatch, tmp_path):
         assert release.wait(timeout=10)
         return {"model_id": "test-model"}
 
-    monkeypatch.setattr(global_training_service, "train_global_model", waiting_training)
+    monkeypatch.setattr(global_training_service, "train_model", waiting_training)
     jobs = GlobalTrainingJobs()
     try:
         state = jobs.start("2025-01-01", tmp_path)
@@ -243,7 +247,7 @@ def test_api_training_persistence_simulation_and_latest_forecast(
     assert status["training"]["status"] == "completed"
     assert len(status["models"]) == 1
     model_id = status["models"][0]["model_id"]
-    monkeypatch.setattr(global_service, "train", lambda *args: pytest.fail("API inference must not train"))
+    monkeypatch.setattr(training_service, "fit_model", lambda *args: pytest.fail("API inference must not train"))
     simulation = client.post("/api/stock/nvda/global-simulation", json={
         "model_id": model_id,
         "start_date": prices["date"].iloc[200],
@@ -282,13 +286,15 @@ def test_walk_forward_simulates_selected_stock_and_retrains_every_20_sessions(
 ):
     training_frames = []
 
-    def capture_train(frame, features, config=None):
-        training_frames.append(frame.copy())
-        return train(frame, features, config=config)
+    original_fit = training_service.fit_model
 
-    monkeypatch.setattr(global_service, "train", capture_train)
-    monkeypatch.setattr(global_service, "save_global_model", lambda *args: pytest.fail("Simulation must not save models"))
-    monkeypatch.setattr(global_service, "load_global_model", lambda *args: pytest.fail("No saved model is required"))
+    def capture_train(frame, features, config, **kwargs):
+        training_frames.append(frame.copy())
+        return original_fit(frame, features, config, **kwargs)
+
+    monkeypatch.setattr(global_service, "fit_model", capture_train)
+    monkeypatch.setattr(model_store_service, "save_global_model", lambda *args: pytest.fail("Simulation must not save models"))
+    monkeypatch.setattr(model_store_service, "load_global_model", lambda *args: pytest.fail("No saved model is required"))
     start = prices["date"].iloc[180]
     end = prices["date"].iloc[226]
     result = global_service.simulate_global_walk_forward(prices, ticker, start, end, 25000, 0.001)
@@ -378,8 +384,8 @@ def test_walk_forward_api_handles_missing_stock_and_training_data(client, monkey
 
 
 def test_walk_forward_rejects_insufficient_history_before_fitting(monkeypatch, prices, training_data):
-    monkeypatch.setattr(global_service, "train", lambda *args: pytest.fail("Cannot fit without enough history"))
-    with pytest.raises(ValueError, match="Za mało danych treningowych"):
+    monkeypatch.setattr(global_service, "fit_model", lambda *args: pytest.fail("Cannot fit without enough history"))
+    with pytest.raises(ValueError, match="Not enough train data"):
         global_service.simulate_global_walk_forward(
             prices, "NVDA", prices["date"].iloc[40], prices["date"].iloc[70], 10000, 0.001,
         )

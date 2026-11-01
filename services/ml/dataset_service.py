@@ -1,8 +1,7 @@
 import numpy as np
 
-from services.ml.news_feature_service import attach_preopen_news_features
 from services.technical_indicator_service import calculate_all_indicators
-from services.ml.feature_schema import (TECHNICAL_FEATURE_COLUMNS as FEATURE_COLUMNS)
+from services.ml.feature_schema import (TECHNICAL_FEATURE_COLUMNS as FEATURE_COLUMNS, NEWS_FEATURE_COLUMNS)
 import pandas as pd
 from services.ml.feature_schema import (get_feature_columns,MARKET_FEATURE_COLUMNS,SECTOR_FEATURE_COLUMNS)
 
@@ -23,7 +22,7 @@ def add_calendar_features(data):
 
     return data
 
-def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features=None):
+def prepare_features(data,*, feature_groups=("technical",), news_features=None, market_features=None, sector_features=None):
     get_feature_columns(feature_groups)
     data = data.copy()
     data = data.sort_values("date")
@@ -42,10 +41,9 @@ def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_st
         avg_volume = data["volume"].rolling(window=20).mean()
         data["volume_vs_avg"] = data["volume"] / avg_volume
     if "news" in feature_groups:
-        if not ticker or news_start is None or news_end is None:
-            raise ValueError(
-                "News features require ticker, news_start and news_end")
-        data = attach_preopen_news_features(data,ticker,news_start,news_end,)
+        data["date"] = pd.to_datetime(data["date"]).dt.strftime("%Y-%m-%d")
+        news_columns = ["execution_date", "decision_at"] + NEWS_FEATURE_COLUMNS
+        data = attach_features_by_date(data, news_features, news_columns).reset_index(drop=True)
     if "market" in feature_groups:
         data = attach_features_by_date(data,market_features,MARKET_FEATURE_COLUMNS)
     if "sector" in feature_groups:
@@ -56,14 +54,13 @@ def prepare_features(data,*, feature_groups=("technical",), ticker=None, news_st
     return data
 
 
-def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features=None):
+def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("technical",), news_features=None, market_features=None, sector_features=None):
     if type(horizon) is not int or horizon < 1:
         raise ValueError("Horizon must be a positive integer")
     if feature_columns is None:
         feature_columns = get_feature_columns(feature_groups)
 
-    data = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features, sector_features=sector_features)
-
+    data = prepare_features(data, feature_groups=feature_groups, news_features=news_features, market_features=market_features, sector_features=sector_features)
     data["next_close"] = data["close"].shift(-1)
     data["next_open"] = data["open"].shift(-1)
     data["next_date"] = data["date"].shift(-1)
@@ -79,11 +76,11 @@ def prepare_dataset(data, horizon=1, *, feature_columns=None, feature_groups=("t
 
     return data
 
-def prepare_latest_features(data, feature_columns, *, feature_groups=("technical",), ticker=None, news_start=None, news_end=None, market_features=None, sector_features = None):
+def prepare_latest_features(data, feature_columns, *, feature_groups=("technical",), news_features=None, market_features=None, sector_features=None):
     if data.empty:
         raise ValueError("Empty data")
 
-    features_df = prepare_features(data, feature_groups=feature_groups, ticker=ticker, news_start=news_start, news_end=news_end, market_features = market_features, sector_features=sector_features)
+    features_df = prepare_features(data, feature_groups=feature_groups, news_features=news_features, market_features = market_features, sector_features=sector_features)
 
     latest = features_df.iloc[[-1]].copy()
 

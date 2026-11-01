@@ -3,7 +3,7 @@ from copy import deepcopy
 from threading import Lock, Thread
 from uuid import uuid4
 
-from services.ml.global_forest_service import train_global_model
+from services.ml.model_service import train_model
 from services.ml.data_preparation_service import validate_training_cutoff
 
 
@@ -30,10 +30,7 @@ class GlobalTrainingJobs:
                 "message": "Rozpoczynanie przygotowania danych treningowych.",
             }
             initial_state = deepcopy(self._state)
-        self._thread = Thread(
-            target=self._run, args=(training_cutoff, model_dir),
-            name="global-forest-training", daemon=True,
-        )
+        self._thread = Thread(target=self._run, args=(training_cutoff, model_dir), name="global-forest-training", daemon=True)
         self._thread.start()
         return initial_state
 
@@ -43,7 +40,7 @@ class GlobalTrainingJobs:
 
     def _run(self, training_cutoff, model_dir):
         try:
-            metadata = train_global_model(training_cutoff, model_dir, self._progress)
+            metadata = train_model(training_cutoff, model_dir, self._progress)
         except Exception as error:
             logging.getLogger(__name__).exception("Global forest training failed")
             message = str(error) if isinstance(error, ValueError) else (

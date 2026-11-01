@@ -6,18 +6,14 @@ from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
 from services.technical_indicator_service import get_latest_indicators, calculate_all_indicators
-from services.ml.model_service import train_and_predict
 from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold
-from services.ml.global_forest_service import (
-    predict_latest_with_global_model,
-    simulate_global_walk_forward,
-    simulate_with_global_model
-)
 from services.ml.global_training_service import GlobalTrainingJobs
 from services.ml.model_store_service import GLOBAL_MODEL_DIR, get_active_global_model, list_global_models
 import re
 from services.news_fetcher import NewsPreparationError
 from services.ml.data_preparation_service import validate_simulation_dates
+from services.ml.model_service import predict_latest, simulate_model
+from services.ml.walk_forward_service import train_and_predict, simulate_global_walk_forward
 
 
 
@@ -335,7 +331,7 @@ def global_simulation_api(ticker):
         data = get_stock_data(ticker, "1d", None)
         if data.empty:
             return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
-        result = simulate_with_global_model(
+        result = simulate_model(
             data, payload.get("model_id"), payload.get("start_date"), payload.get("end_date"),
             initial_cash, fee_rate, app.config["GLOBAL_MODEL_DIR"],
             confidence_threshold=confidence_threshold, ticker=ticker
@@ -399,7 +395,7 @@ def latest_global_prediction_api(ticker):
     if data.empty:
         return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
     try:
-        result = predict_latest_with_global_model(
+        result = predict_latest(
             data, request.args.get("model_id"), app.config["GLOBAL_MODEL_DIR"], ticker=ticker)
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404

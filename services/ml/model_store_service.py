@@ -2,11 +2,11 @@ import json
 import re
 from pathlib import Path
 from uuid import uuid4
+from datetime import datetime, timezone
 import torch
 from sklearn.base import is_classifier, is_regressor
 from services.ml.model_config import ModelConfig
 import joblib
-from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.feature_schema import get_feature_columns
 from services.ml.news_feature_service import NEWS_FEATURE_POLICY
 from services.ml.mlp_model import NeuralNetwork
@@ -14,7 +14,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
 from copy import deepcopy
 from services.ml.market_feature_service import MARKET_FEATURE_POLICY
-from services.ml.sector_feature_service import (SECTOR_FEATURE_POLICY, SECTOR_BENCHMARKS)
+from services.ml.sector_feature_service import (SECTOR_FEATURE_POLICY, SECTOR_BENCHMARKS, extract_sector_benchmarks)
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
@@ -23,6 +23,39 @@ TORCH_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "neural_netw
 TORCH_MODEL_FORMAT_VERSION = 1
 LIGHTGBM_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "global_lightgbm")
 MODEL_ID_PATTERN = re.compile(r"(global_forest|global_lightgbm)_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
+TORCH_MODEL_ID_PATTERN = re.compile(r"mlp_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}")
+
+
+def build_training_metadata(final_train_df, feature_columns, config, training_cutoff, *, news_start=None, news_end=None):
+    if final_train_df.empty:
+        raise ValueError("Final training dataframe cannot be empty")
+    metadata = {
+        "config": config.to_dict(),
+        "feature_columns": list(feature_columns),
+        "training_cutoff": training_cutoff,
+        "train_tickers": final_train_df["ticker"].drop_duplicates().tolist(),
+        "training_rows": int(len(final_train_df)),
+        "training_start_date": str(final_train_df["date"].min()),
+        "training_end_date": str(final_train_df["date"].max()),
+        "last_target_end_date": str(final_train_df["target_end_date"].max()),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    if config.task == "classification":
+        metadata["baseline_prediction"] = int(final_train_df["target"].mode().iloc[0])
+        metadata["target_definition"] = f"open(t+{config.horizon + 1}) > open(t+1)"
+    else:
+        metadata["baseline_return"] = float(final_train_df["target_return"].mean())
+        metadata["target_definition"] = f"open(t+{config.horizon + 1}) / open(t+1) - 1"
+    if "news" in config.feature_groups:
+        metadata["news_policy"] = deepcopy(NEWS_FEATURE_POLICY)
+        metadata["news_start"] = news_start
+        metadata["news_end"] = news_end
+    if "market" in config.feature_groups:
+        metadata["market_policy"] = deepcopy(MARKET_FEATURE_POLICY)
+    if "sector" in config.feature_groups:
+        metadata["sector_policy"] = deepcopy(SECTOR_FEATURE_POLICY)
+        metadata["sector_benchmarks"] = extract_sector_benchmarks(final_train_df)
+    return metadata
 
 
 def model_path(model_id, model_dir=None):
@@ -46,9 +79,7 @@ def save_global_model(model, metadata, model_dir=None):
     metadata = dict(metadata)
     config = get_model_config(metadata)
 
-    if (
-        config.algorithm not in ("random_forest", "lightgbm")
-        or config.scope != "global"):
+    if (config.algorithm not in ("random_forest", "lightgbm") or config.scope != "global"):
         raise ValueError("Expected a global tree model configuration")
 
     if "market" in config.feature_groups:
@@ -57,10 +88,7 @@ def save_global_model(model, metadata, model_dir=None):
         metadata.setdefault("sector_policy", deepcopy(SECTOR_FEATURE_POLICY))
     validate_feature_policies(metadata, config)
 
-    prefix = (
-        "global_forest"
-        if config.algorithm == "random_forest"
-        else "global_lightgbm")
+    prefix = ("global_forest" if config.algorithm == "random_forest" else "global_lightgbm")
 
     metadata["model_id"] = (f"{prefix}_{metadata['training_cutoff']}_{uuid4().hex[:8]}")
     metadata["format_version"] = MODEL_FORMAT_VERSION
@@ -74,8 +102,7 @@ def save_global_model(model, metadata, model_dir=None):
     try:
         joblib.dump({"model": model, "metadata": metadata}, temporary_model, compress=3)
         temporary_metadata.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
-        )
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary_model.replace(path)
         temporary_metadata.replace(metadata_path)
     finally:
@@ -130,8 +157,7 @@ def get_model_config(metadata):
     return ModelConfig(
         algorithm="random_forest",
         task="classification",
-        random_state=metadata.get("random_state", 26),
-    )
+        random_state=metadata.get("random_state", 26))
 
 def validate_feature_policies(metadata, config):
     if "news" in config.feature_groups:
@@ -159,6 +185,20 @@ def validate_feature_policies(metadata, config):
             raise ValueError("Sector benchmark mapping must cover all training tickers")
         if any(benchmark not in SECTOR_BENCHMARKS.values() for benchmark in benchmarks.values()):
             raise ValueError("Unsupported sector benchmark")
+
+def validate_model_id(model_id):
+    if not isinstance(model_id, str) or not (MODEL_ID_PATTERN.fullmatch(model_id) or TORCH_MODEL_ID_PATTERN.fullmatch(model_id)):
+        raise ValueError("Invalid model ID")
+    return model_id
+
+
+def load_model(model_id, model_dir=None):
+    validate_model_id(model_id)
+    if model_id.startswith("mlp_"):
+        return load_torch_model(model_id, model_dir)
+    model, metadata = load_global_model(model_id, model_dir)
+    return model, None, metadata
+
 
 def load_global_model(model_id, model_dir=None):
     path = model_path(model_id, model_dir)
@@ -240,7 +280,7 @@ def save_torch_model(model, scaler, metadata, model_dir=None):
     return metadata
 
 def load_torch_model(model_id, model_dir=None):
-    if not isinstance(model_id, str) or not re.fullmatch(r"mlp_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}",model_id):
+    if not isinstance(model_id, str) or not TORCH_MODEL_ID_PATTERN.fullmatch(model_id):
         raise ValueError("Incompatible model ID")
 
     directory = Path(model_dir or TORCH_MODEL_DIR) / model_id
@@ -251,11 +291,7 @@ def load_torch_model(model_id, model_dir=None):
 
     if metadata["model_id"] != model_id:
         raise ValueError("Incompatible model ID")
-    state_dict = torch.load(
-        directory / "weights.pt",
-        map_location="cpu",
-        weights_only=True,
-    )
+    state_dict = torch.load(directory / "weights.pt", map_location="cpu", weights_only=True)
 
     model = NeuralNetwork(input_size=metadata["input_size"])
     model.load_state_dict(state_dict)

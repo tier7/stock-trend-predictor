@@ -1,10 +1,7 @@
 import argparse
-import math
 
 from services.ml.feature_schema import FEATURE_GROUPS
-from services.ml.global_forest_service import train_global_model
-from services.ml.lightgbm_service import train_lightgbm_model
-from services.ml.mlp_service import train_mlp_model
+from services.ml.model_service import train_model
 from services.ml.model_config import ModelConfig
 from services.ml.sector_feature_service import load_sector_assignments
 from services.news_fetcher import NewsPreparationError
@@ -57,24 +54,12 @@ def main():
             "model_dir": arguments.model_dir
         }
 
-        if config.algorithm == "random_forest":
-            metadata = train_global_model(arguments.cutoff, training_tickers=arguments.tickers, progress_callback=print, **training_options)
-        elif config.algorithm == "mlp":
-            epochs = 50 if arguments.epochs is None else arguments.epochs
-            learning_rate = 0.001 if arguments.learning_rate is None else arguments.learning_rate
-            batch_size = 256 if arguments.batch_size is None else arguments.batch_size
-            patience = 5 if arguments.patience is None else arguments.patience
-            if epochs < 1 or batch_size < 1 or patience < 1:
-                raise ValueError("epochs, batch-size i patience muszą być dodatnie")
-            if not math.isfinite(learning_rate) or learning_rate <= 0:
-                raise ValueError("learning-rate musi być skończoną, dodatnią liczbą")
-            metadata = train_mlp_model(arguments.tickers, arguments.validation_start, arguments.cutoff, epochs=epochs, learning_rate=learning_rate, patience=patience, batch_size=batch_size, **training_options)
-        else:
-            n_estimators = 500 if arguments.n_estimators is None else arguments.n_estimators
-            patience = 20 if arguments.patience is None else arguments.patience
-            if n_estimators < 1 or patience < 1:
-                raise ValueError("n-estimators i patience muszą być dodatnie")
-            metadata = train_lightgbm_model(arguments.tickers, arguments.validation_start, arguments.cutoff, n_estimators=n_estimators, patience=patience, **training_options)
+        metadata = train_model(
+            arguments.cutoff, training_tickers=arguments.tickers, validation_start=arguments.validation_start,
+            epochs=arguments.epochs, learning_rate=arguments.learning_rate, batch_size=arguments.batch_size,
+            patience=arguments.patience, n_estimators=arguments.n_estimators,
+            progress_callback=print, **training_options
+        )
     except NewsPreparationError as error:
         parser.exit(1, f"Nie udało się przygotować newsów: {error}\n")
     except (OSError, ValueError) as error:

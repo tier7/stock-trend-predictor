@@ -5,10 +5,9 @@ from pathlib import Path
 from services.data_updater import ensure_stock_data
 from services.db import get_stock_data
 from services.ml.data_preparation_service import validate_simulation_dates
-from services.ml.mlp_service import predict_latest_with_mlp_model, predict_with_mlp_model
-from services.ml.model_store_service import get_model_config
+from services.ml.model_service import predict_history, predict_latest
+from services.ml.model_store_service import get_model_config, validate_model_id
 from services.ml.sector_feature_service import load_sector_assignments
-from services.ml.tree_prediction_service import predict_latest_with_global_model, predict_with_global_model
 from services.news_fetcher import NewsPreparationError
 
 
@@ -38,14 +37,7 @@ def main():
                 raise ValueError("Prognozy historyczne wymagają --start i --end")
             validate_simulation_dates(arguments.start, arguments.end)
 
-        if arguments.model_id.startswith("mlp_"):
-            latest_predictor = predict_latest_with_mlp_model
-            history_predictor = predict_with_mlp_model
-        elif arguments.model_id.startswith(("global_forest_", "global_lightgbm_")):
-            latest_predictor = predict_latest_with_global_model
-            history_predictor = predict_with_global_model
-        else:
-            raise ValueError("Nieznana rodzina modelu: podaj ID RF, LightGBM lub MLP wypisane po treningu")
+        validate_model_id(arguments.model_id)
 
         if not ensure_stock_data(ticker, "1d"):
             raise ValueError(f"Brak danych cenowych dla {ticker}")
@@ -54,7 +46,7 @@ def main():
             raise ValueError(f"Brak danych {ticker} w bazie")
 
         if arguments.latest:
-            result = latest_predictor(data, arguments.model_id, model_dir=arguments.model_dir, ticker=ticker, prepare_news=not arguments.prepared_news_only, progress_callback=print, sector_assignments=sector_assignments)
+            result = predict_latest(data, arguments.model_id, model_dir=arguments.model_dir, ticker=ticker, prepare_news=not arguments.prepared_news_only, progress_callback=print, sector_assignments=sector_assignments)
             metadata = result.pop("model_metadata")
             result["model_id"] = metadata["model_id"]
             result["ticker"] = ticker
@@ -63,7 +55,7 @@ def main():
             if arguments.output:
                 Path(arguments.output).write_text(payload + "\n", encoding="utf-8")
         else:
-            results, metadata = history_predictor(data, arguments.model_id, arguments.start, arguments.end, model_dir=arguments.model_dir, ticker=ticker, prepare_news=not arguments.prepared_news_only, progress_callback=print, sector_assignments=sector_assignments)
+            results, metadata = predict_history(data, arguments.model_id, arguments.start, arguments.end, model_dir=arguments.model_dir, ticker=ticker, prepare_news=not arguments.prepared_news_only, progress_callback=print, sector_assignments=sector_assignments)
             config = get_model_config(metadata)
             columns = ["date", "next_date", "target_end_date", config.target_column]
             if "sector_benchmark" in results.columns:

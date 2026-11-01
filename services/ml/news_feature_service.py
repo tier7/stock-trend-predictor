@@ -1,7 +1,5 @@
 import pandas as pd
-from services.db import (get_news_imports,get_news_without_sentiment,get_news_with_sentiment,)
 from services.ml.finbert_service import MODEL_NAME, MODEL_REVISION
-from services.news_fetcher import classify_news_relevance, find_missing_news_ranges
 from services.ml.prediction_time_service import (DEFAULT_MARKET_CALENDAR,NEWS_MINUTES_BEFORE_OPEN,build_market_schedule,build_preopen_schedule)
 from services.ml.feature_schema import NEWS_BASE_FEATURE_COLUMNS, NEWS_FEATURE_COLUMNS
 
@@ -71,52 +69,6 @@ def aggregate_news_by_session(assigned_news):
     return features
 
 
-def load_scored_news_range(ticker, start_date, end_date):
-    ticker = ticker.upper()
-    range_start = pd.to_datetime(start_date, utc=True)
-    range_end = pd.to_datetime(end_date, utc=True)
-
-    if pd.isna(range_start) or pd.isna(range_end):
-        raise ValueError("Range dates cannot be missing")
-
-    if range_start >= range_end:
-        raise ValueError("Start date must be before end date")
-
-    imports = get_news_imports(ticker, range_start, range_end)
-
-    missing_ranges = find_missing_news_ranges(imports, range_start, range_end)
-
-    if missing_ranges:
-        first_missing = missing_ranges[0]
-        raise ValueError(
-            f"{ticker}: Missing news coverage between "
-            f"{first_missing['start_date']} and "
-            f"{first_missing['end_date']}")
-
-
-    pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION, start_date=range_start, end_date=range_end)
-
-    for article in pending:
-        if classify_news_relevance(article, ticker)["use_for_model"]:
-            raise ValueError(f"{ticker}: First calculate the missing FinBERT scores")
-
-    articles = get_news_with_sentiment(ticker, MODEL_NAME, MODEL_REVISION)
-    accepted_articles = []
-    for article in articles:
-        if classify_news_relevance(article, ticker)["use_for_model"]:
-            accepted_articles.append(article)
-
-    news_df = prepare_news_dataframe(accepted_articles)
-
-    if not news_df.empty:
-        news_df = news_df.loc[
-            (news_df["available_at"] >= range_start)
-            & (news_df["available_at"] < range_end)].copy()
-
-    return news_df
-
-
-
 def assign_news_to_preopen_sessions(news_df, sessions):
     if news_df.empty:
         return news_df.copy()
@@ -125,13 +77,9 @@ def assign_news_to_preopen_sessions(news_df, sessions):
         sessions[["session_date", "previous_close", "decision_at"]].sort_values("decision_at"),
         left_on="available_at",
         right_on="decision_at",
-        direction="forward",
-    )
-    # A story after today's cutoff must not leak into tomorrow's overnight window.
-    return assigned.loc[
-        assigned["available_at"].gt(assigned["previous_close"])
-        & assigned["available_at"].le(assigned["decision_at"])
-    ].copy()
+        direction="forward")
+
+    return assigned.loc[assigned["available_at"].gt(assigned["previous_close"]) & assigned["available_at"].le(assigned["decision_at"])].copy()
 
 def get_news_history_start(start_date,end_date,minutes_before_open=NEWS_MINUTES_BEFORE_OPEN):
     range_start = pd.to_datetime(start_date, utc=True)
@@ -177,11 +125,7 @@ def build_preopen_news_features(news_df,schedule,start_date,end_date,minutes_bef
     assigned = assign_news_to_preopen_sessions(news, sessions)
     aggregated = aggregate_news_by_session(assigned)
 
-    result = sessions[["session_date", "feature_date", "execution_date", "decision_at", "previous_close"]].merge(
-        aggregated,
-        on="session_date",
-        how="left",
-        validate="one_to_one")
+    result = sessions[["session_date", "feature_date", "execution_date", "decision_at", "previous_close"]].merge(aggregated,on="session_date",how="left",validate="one_to_one")
 
     result = result.rename(columns={"feature_date": "date"})
 
@@ -202,29 +146,3 @@ def build_preopen_news_features(news_df,schedule,start_date,end_date,minutes_bef
     result = result.loc[result["previous_close"] >= range_start]
 
     return result[["date", "execution_date", "decision_at"] + NEWS_FEATURE_COLUMNS].sort_values("date").reset_index(drop=True)
-
-
-
-def attach_preopen_news_features(data,ticker,start_date,end_date,minutes_before_open=NEWS_FEATURE_POLICY["minutes_before_open"]):
-    if data.empty:
-        raise ValueError("Empty stock data")
-
-    range_start = pd.to_datetime(start_date, utc=True)
-    range_end = pd.to_datetime(end_date, utc=True)
-    history_start=get_news_history_start(range_start, range_end, minutes_before_open)
-
-    news_df = load_scored_news_range(ticker, history_start, range_end.isoformat())
-
-    calendar_start = (pd.to_datetime(history_start, utc=True) - pd.DateOffset(days=14)).date().isoformat()
-    calendar_end = (range_end + pd.DateOffset(days=14)).date().isoformat()
-
-    schedule = build_market_schedule(calendar_start, calendar_end)
-
-    news_features = build_preopen_news_features(news_df,schedule, range_start,range_end,minutes_before_open=minutes_before_open, history_start=history_start)
-
-    prices = data.copy()
-    prices["date"] = pd.to_datetime(prices["date"]).dt.strftime("%Y-%m-%d")
-
-    return prices.merge(news_features,on="date",how="left",validate="one_to_one")
-
-

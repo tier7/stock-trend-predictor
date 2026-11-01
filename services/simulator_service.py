@@ -1,5 +1,7 @@
 from datetime import date
 from math import isfinite
+from sklearn.metrics import accuracy_score
+from services.ml.evaluation_service import evaluate
 
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
@@ -218,5 +220,40 @@ def run_buy_and_hold(predictions, initial_cash=10000, fee_rate=0.001):
     }
 
 
+def build_backtest_result(results_df, start_date, end_date, initial_cash, fee_rate, training_rows,confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+    results_df = results_df.sort_values("date")
+    model_eval = evaluate(results_df)
+    baseline_acc = accuracy_score(results_df["target"], results_df["baseline_prediction"])
 
+    result_df = results_df[
+        ["date", "close", "next_date", "next_open", "next_close", "target_end_date",
+         "target_end_open", "target", "prediction", "probability_up"]
+    ].copy()
+    result_df["is_correct"] = result_df["prediction"] == result_df["target"]
+    result_df["date"] = result_df["date"].astype(str)
+    result_df["target_end_date"] = result_df["target_end_date"].astype(str)
+    result_df["next_date"] = result_df["next_date"].astype(str)
+    prediction_records = result_df.to_dict(orient="records")
 
+    modelsim = run_backtest(prediction_records, initial_cash, fee_rate, confidence_threshold)
+    bahsim = run_buy_and_hold(prediction_records,initial_cash,fee_rate)
+
+    return {
+        "accuracy": float(model_eval["accuracy"]),
+        "requested_start_date": start_date,
+        "requested_end_date": end_date,
+        "effective_test_start_date": str(result_df["date"].iloc[0]),
+        "effective_test_end_date": str(result_df["target_end_date"].iloc[-1]),
+        "training_rows": int(training_rows),
+        "total_predictions": int(len(result_df)),
+        "correct_predictions": int(result_df["is_correct"].sum()),
+        "predictions": prediction_records,
+        "baseline_accuracy": float(baseline_acc),
+        "confusion_matrix": model_eval["confusion_matrix"],
+        "precision": float(model_eval["precision"]),
+        "recall": float(model_eval["recall"]),
+        "f1": float(model_eval["f1"]),
+        "model_summary": modelsim,
+        "buyandhold_summary": bahsim
+
+    }
