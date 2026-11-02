@@ -93,42 +93,14 @@ def predict_model(model, data, feature_columns, config, scaler=None):
     return predict_tree(model, data, feature_columns, config=config)
 
 
-def train_model(
-    training_cutoff, model_dir=None, progress_callback=None, *, config=None,
-    training_tickers=None, validation_start=None, n_estimators=None, epochs=None,
-    learning_rate=None, batch_size=None, patience=None, news_start=None, news_end=None,
-    prepare_news=True, sector_assignments=None):
-
-    if config is None:
-        config = ModelConfig(algorithm="random_forest", task="classification")
-    if config.scope != "global":
-        raise ValueError("Expected a global model configuration")
-    parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs,learning_rate=learning_rate, batch_size=batch_size, patience=patience)
-    if config.algorithm == "random_forest":
-        if validation_start is not None:
-            raise ValueError("Random Forest training does not use validation_start")
-        if "news" in config.feature_groups and training_tickers is None:
-            raise ValueError("News features require an explicit list of training tickers")
-        tickers = list(DEFAULT_TRAINING_TICKERS if training_tickers is None else training_tickers)
-    else:
-        if training_tickers is None or validation_start is None:
-            raise ValueError("MLP and LightGBM require training tickers and validation_start")
-        tickers = list(training_tickers)
-
-    training_data = prepare_training_data(
-        tickers, validation_start, training_cutoff, config,
-        news_start=news_start, news_end=news_end, prepare_news=prepare_news,
-        sector_assignments=sector_assignments, progress_callback=progress_callback)
-
+def fit_prepared_model(training_data, config, parameters, *, validation_start=None, progress_callback=None):
     final_train_df = training_data["final_train_df"]
     feature_columns = training_data["feature_columns"]
-    metadata = build_training_metadata(
-        final_train_df, feature_columns, config, training_cutoff,
-        news_start=training_data["news_start"], news_end=training_data["news_end"])
+    metadata = {}
 
     report = progress_callback or print
     if config.algorithm == "random_forest":
-        report(f"Uczenie foresta na {len(final_train_df)} próbkach.")
+        report(f"Train random forest on {len(final_train_df)} samples.")
         model, scaler, details = fit_model(final_train_df, feature_columns, config, **parameters)
         metadata.update(details)
     else:
@@ -169,21 +141,67 @@ def train_model(
             progress_callback=progress_callback, **final_parameters
         )
         if config.algorithm == "mlp":
-            metadata.update({key: value for key, value in selection_details.items() if key not in ("history", "best_epoch")})
+            metadata.update(
+                {key: value for key, value in selection_details.items() if key not in ("history", "best_epoch")})
             metadata["epochs"] = selected_steps
             metadata["selection_history"] = selection_details["history"]
             metadata["final_history"] = details["history"]
-            metadata["best_validation_loss"] = float(min(row["validation_loss"] for row in selection_details["history"]))
+            metadata["best_validation_loss"] = float(
+                min(row["validation_loss"] for row in selection_details["history"]))
         else:
             metadata.update(details)
             metadata["best_iteration"] = selected_steps
             metadata["selection_scores"] = selection_details["selection_scores"]
             metadata["training_parameters"]["max_estimators"] = parameters["n_estimators"]
 
-    report("Zapisywanie wytrenowanego modelu.")
+
+    return model, scaler, metadata
+
+
+def train_model(
+    training_cutoff, model_dir=None, progress_callback=None, *, config=None,
+    training_tickers=None, validation_start=None, n_estimators=None, epochs=None,
+    learning_rate=None, batch_size=None, patience=None, news_start=None, news_end=None,
+    prepare_news=True, sector_assignments=None):
+
+    if config is None:
+        config = ModelConfig(algorithm="random_forest", task="classification")
+    if config.scope != "global":
+        raise ValueError("Expected a global model configuration")
+    parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs,learning_rate=learning_rate, batch_size=batch_size, patience=patience)
+    if config.algorithm == "random_forest":
+        if validation_start is not None:
+            raise ValueError("Random Forest training does not use validation_start")
+        if "news" in config.feature_groups and training_tickers is None:
+            raise ValueError("News features require an explicit list of training tickers")
+        tickers = list(DEFAULT_TRAINING_TICKERS if training_tickers is None else training_tickers)
+    else:
+        if training_tickers is None or validation_start is None:
+            raise ValueError("MLP and LightGBM require training tickers and validation_start")
+        tickers = list(training_tickers)
+
+    training_data = prepare_training_data(
+        tickers, validation_start, training_cutoff, config,
+        news_start=news_start, news_end=news_end, prepare_news=prepare_news,
+        sector_assignments=sector_assignments, progress_callback=progress_callback)
+
+    final_train_df = training_data["final_train_df"]
+    feature_columns = training_data["feature_columns"]
+    metadata = build_training_metadata(
+        final_train_df, feature_columns, config, training_cutoff,
+        news_start=training_data["news_start"], news_end=training_data["news_end"])
+
+    model, scaler, training_details = fit_prepared_model(training_data, config, parameters, validation_start=validation_start, progress_callback=progress_callback)
+    metadata.update(training_details)
+
+    report = progress_callback or print
+    report("Saving trained model")
+
     if config.algorithm == "mlp":
         return save_torch_model(model, scaler, metadata, model_dir)
+
     return save_global_model(model, metadata, model_dir)
+
 
 
 def _predict_with_loaded_model(data, model, scaler, metadata, config, start_date, end_date, *, ticker=None, prepare_news=True, progress_callback=None, sector_assignments=None):

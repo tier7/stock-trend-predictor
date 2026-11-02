@@ -1,13 +1,14 @@
 
 from services.db import get_stock_data
-from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model
 from services.ml.walk_forward_service import RETRAIN_INTERVAL, run_walk_forward, train_and_predict
-from services.ml.data_preparation_service import connect_data, split_dataset_by_date, validate_simulation_dates
+from services.ml.data_preparation_service import connect_data, split_dataset_by_date, validate_simulation_dates, prepare_evaluation_data
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.model_config import ModelConfig
-from services.ml.evaluation_service import evaluate
 from services.ml.model_store_service import get_active_global_model
 import pandas as pd
+from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters
+from services.ml.evaluation_service import evaluate, predict_baseline
+from services.ml.calibration_service import fit_calibrator, apply_calibrator
 
 
 def build_result_row(ticker, model_type, result):
@@ -130,6 +131,47 @@ def run_experiment(start_date, end_date):
     seen = results[results["ticker"].isin(train_tickers)]
     unseen = results[results["ticker"].isin(UNSEEN_TICKERS)]
     return seen, unseen
+
+def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_start=None, calibrate=False, progress_callback=None):
+    if calibrate and config.task != "classification":
+        raise ValueError("Calibration task not supported.")
+
+    model, scaler, training_details = fit_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, progress_callback=progress_callback)
+    feature_columns = evaluation_data["feature_columns"]
+    test_predictions = predict_model(
+        model, evaluation_data["test_df"], feature_columns, config, scaler)
+    baseline_predictions = predict_baseline(
+        evaluation_data["final_train_df"], evaluation_data["test_df"], config)
+
+    predictions = {"model": test_predictions, "baseline": baseline_predictions}
+    calibrator = None
+
+    if calibrate:
+        calibration_predictions = predict_model(
+            model, evaluation_data["calibration_df"], feature_columns, config, scaler)
+        calibrator = fit_calibrator(calibration_predictions, config)
+        predictions["calibrated_model"] = apply_calibrator(test_predictions, calibrator, config)
+
+    metrics = {name: evaluate(frame, config) for name, frame in predictions.items()}
+
+    return {
+        "model": model,
+        "scaler": scaler,
+        "calibrator": calibrator,
+        "training_details": training_details,
+        "predictions": predictions,
+        "metrics": metrics
+    }
+
+
+def run_model_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, *, calibrate=False, n_estimators=None, epochs=None, learning_rate=None, batch_size=None, patience=None, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None):
+    if calibrate and config.task != "classification":
+        raise ValueError("Calibration task not supported.")
+
+    parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,batch_size=batch_size, patience=patience)
+    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config,news_start=news_start, prepare_news=prepare_news,sector_assignments=sector_assignments, progress_callback=progress_callback)
+
+    return evaluate_prepared_model(evaluation_data, config, parameters,validation_start=validation_start, calibrate=calibrate,progress_callback=progress_callback)
 
 if __name__ == "__main__":
     seen_test_df, unseen_test_df = run_experiment("2025-01-01", "2025-12-31")

@@ -188,6 +188,30 @@ def validate_simulation_dates(start_date, end_date):
         raise ValueError("End date must be greater than start date.")
 
 
+def validate_evaluation_dates(validation_start, calibration_start, test_start, test_end):
+    validate_date(validation_start, "Validation start date")
+    validate_date(test_start, "Test start date")
+    validate_date(test_end, "Test end date")
+    validate_date(calibration_start, "Calibration start date")
+
+    if not (validation_start < calibration_start < test_start < test_end):
+        raise ValueError("Invalid dates order.")
+
+def split_evaluation_data(data, validation_start, calibration_start, test_start, test_end):
+    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end)
+    if data.empty:
+        raise ValueError("No data to split.")
+
+    selection_train_df, validation_df = split_dataset_by_date(data, validation_start, calibration_start)
+    final_train_df, calibration_df = split_dataset_by_date(data, calibration_start,test_start)
+    _, test_df = split_dataset_by_date(data, test_start, test_end)
+    result = {"selection_train_df": selection_train_df, "validation_df": validation_df, "final_train_df": final_train_df, "calibration_df": calibration_df, "test_df": test_df}
+
+    for name, frame in result.items():
+        if frame.empty:
+            raise ValueError(f"Empty position in result dict: {name}")
+
+    return result
 def select_training_rows(data, cutoff):
     return data.loc[(data["date"] < cutoff) & (data["target_end_date"] <= cutoff)].copy()
 
@@ -275,8 +299,7 @@ def prepare_latest_prediction_data(data, config, feature_columns, training_cutof
 
 def prepare_training_data(
     tickers, validation_start, training_cutoff, config, *, news_start=None,
-    news_end=None, prepare_news=True, sector_assignments=None, progress_callback=None
-):
+    news_end=None, prepare_news=True, sector_assignments=None, progress_callback=None):
     validate_training_cutoff(training_cutoff)
     tickers = list(tickers)
     if not tickers:
@@ -317,3 +340,33 @@ def prepare_training_data(
         "news_start": news_start,
         "news_end": news_end
     }
+
+def prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, *, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None):
+    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end)
+    tickers = list(tickers)
+    if not tickers:
+        raise ValueError("Tickers cannot be empty")
+    if config.scope != "global":
+        raise ValueError("Expected a global model configuration")
+
+    feature_columns = get_feature_columns(config.feature_groups)
+    news_end = None
+    if "news" in config.feature_groups:
+        news_start, news_end = normalize_training_news_range(news_start, test_end, test_end)
+
+    data = connect_data(
+        tickers, progress_callback=progress_callback, horizon=config.horizon,
+        feature_columns=feature_columns, feature_groups=config.feature_groups,
+        news_start=news_start, news_end=news_end, prepare_news=prepare_news,
+        sector_assignments=sector_assignments)
+
+    result = split_evaluation_data(data, validation_start, calibration_start, test_start, test_end)
+    missing_tickers = sorted(set(tickers) - set(result["final_train_df"]["ticker"]))
+    if missing_tickers:
+        raise ValueError(f"No training data before choosen date: {missing_tickers}.")
+
+    result["feature_columns"] = feature_columns
+    result["news_start"] = news_start
+    result["news_end"] = news_end
+
+    return result

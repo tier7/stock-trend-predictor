@@ -31,6 +31,7 @@ def evaluate(results_df, config=None):
         recall = recall_score(y_test, predictions, zero_division=0)
         f1 = f1_score(y_test, predictions, zero_division=0)
         loss = log_loss(y_test, results_df["probability_up"], labels=[0, 1])
+        brier_score = ((results_df["probability_up"] - y_test) ** 2).mean()
         return {
             "predictions": predictions,
             "probability_up": results_df["probability_up"],
@@ -44,7 +45,8 @@ def evaluate(results_df, config=None):
             "precision": precision,
             "recall": recall,
             "f1": f1,
-            "log_loss": loss
+            "log_loss": loss,
+            "brier_score": float(brier_score)
         }
     elif config.task == "regression":
         predictions = results_df["predicted_return"]
@@ -57,18 +59,30 @@ def evaluate(results_df, config=None):
             "rmse": rmse
         }
 
-def calculate_baseline_loss(train_df, validation_df, config):
-    if train_df.empty:
-        raise ValueError("Empty train dataframe")
-    if validation_df.empty:
-        raise ValueError("Empty validation dataframe")
+def predict_baseline(train_df, evaluation_df, config):
+    if train_df.empty or evaluation_df.empty:
+        raise ValueError("Empty train or evaluation dataframe")
+    evaluation_df = evaluation_df.copy()
+    col_mean = train_df[config.target_column].mean()
 
-    baseline = train_df[config.target_column].mean()
-    predictions = [baseline] * len(validation_df)
+    if config.task == "classification":
+        evaluation_df["probability_up"] = col_mean
+        evaluation_df["prediction"] = int(train_df[config.target_column].mode().iloc[0])
+
+
+    if config.task == "regression":
+        evaluation_df["predicted_return"] = col_mean
+
+    return evaluation_df
+
+
+def calculate_baseline_loss(train_df, validation_df, config):
+
+    predictions_df = predict_baseline(train_df, validation_df, config)
     y_true = validation_df[config.target_column]
 
     if config.task == "classification":
-        loss = log_loss(y_true, predictions, labels=[0,1])
+        loss = log_loss(y_true, predictions_df["probability_up"], labels=[0,1])
     else:
-        loss = mean_squared_error(y_true, predictions)
+        loss = mean_squared_error(y_true, predictions_df["predicted_return"])
     return loss
