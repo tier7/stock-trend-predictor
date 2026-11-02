@@ -11,6 +11,7 @@ from services.ml.mlp_service import fit as fit_mlp, predict as predict_mlp
 from services.ml.model_store_service import (build_training_metadata, save_global_model, save_torch_model, load_model, get_model_config)
 from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, build_backtest_result
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
+from services.ml.calibration_service import apply_saved_calibration
 
 DEFAULT_TRAINING_TICKERS = (
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
@@ -206,11 +207,13 @@ def train_model(
 
 def _predict_with_loaded_model(data, model, scaler, metadata, config, start_date, end_date, *, ticker=None, prepare_news=True, progress_callback=None, sector_assignments=None):
     feature_columns = metadata["feature_columns"]
+    prediction_cutoff = metadata.get("calibration", {}).get("end_date", metadata["training_cutoff"])
     test_df = prepare_prediction_data(
-        data, start_date, end_date, config, feature_columns, metadata["training_cutoff"],
+        data, start_date, end_date, config, feature_columns, prediction_cutoff,
         ticker=ticker, prepare_news=prepare_news, progress_callback=progress_callback,
         sector_assignments=sector_assignments, saved_benchmarks=metadata.get("sector_benchmarks"))
     results = predict_model(model, test_df, feature_columns, config, scaler)
+    results = apply_saved_calibration(results, metadata, config)
     if config.task == "classification":
         results["baseline_prediction"] = metadata["baseline_prediction"]
     return results
@@ -255,12 +258,14 @@ def predict_latest(data, model_id, model_dir=None, *, ticker=None, as_of=None,pr
     model, scaler, metadata = load_model(model_id, model_dir)
     config = get_model_config(metadata)
     feature_columns = metadata["feature_columns"]
+    prediction_cutoff = metadata.get("calibration", {}).get("end_date", metadata["training_cutoff"])
     latest, prediction_window = prepare_latest_prediction_data(
-        data, config, feature_columns, metadata["training_cutoff"], ticker=ticker,
+        data, config, feature_columns, prediction_cutoff, ticker=ticker,
         as_of=as_of, prepare_news=prepare_news, progress_callback=progress_callback,
         sector_assignments=sector_assignments, saved_benchmarks=metadata.get("sector_benchmarks")
     )
-    forecast = predict_model(model, latest, feature_columns, config, scaler).iloc[0]
+    predictions = predict_model(model, latest, feature_columns, config, scaler)
+    forecast = apply_saved_calibration(predictions, metadata, config).iloc[0]
     result = {
         "date": str(latest["date"].iloc[0]),
         "task": config.task,

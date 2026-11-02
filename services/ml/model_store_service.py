@@ -15,9 +15,11 @@ from lightgbm import LGBMClassifier, LGBMRegressor
 from copy import deepcopy
 from services.ml.market_feature_service import MARKET_FEATURE_POLICY
 from services.ml.sector_feature_service import (SECTOR_FEATURE_POLICY, SECTOR_BENCHMARKS, extract_sector_benchmarks)
+from services.ml.calibration_service import restore_calibrator
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
+CALIBRATED_MODEL_FORMAT_VERSION = 2
 
 TORCH_MODEL_DIR = (Path(__file__).resolve().parents[2] / "models" / "neural_networks")
 TORCH_MODEL_FORMAT_VERSION = 1
@@ -76,7 +78,7 @@ def model_path(model_id, model_dir=None):
 
 
 def save_global_model(model, metadata, model_dir=None):
-    metadata = dict(metadata)
+    metadata = deepcopy(metadata)
     config = get_model_config(metadata)
 
     if (config.algorithm not in ("random_forest", "lightgbm") or config.scope != "global"):
@@ -86,12 +88,14 @@ def save_global_model(model, metadata, model_dir=None):
         metadata.setdefault("market_policy",deepcopy(MARKET_FEATURE_POLICY))
     if "sector" in config.feature_groups:
         metadata.setdefault("sector_policy", deepcopy(SECTOR_FEATURE_POLICY))
+    metadata["format_version"] = CALIBRATED_MODEL_FORMAT_VERSION if "calibration" in metadata else MODEL_FORMAT_VERSION
     validate_feature_policies(metadata, config)
 
     prefix = ("global_forest" if config.algorithm == "random_forest" else "global_lightgbm")
 
     metadata["model_id"] = (f"{prefix}_{metadata['training_cutoff']}_{uuid4().hex[:8]}")
-    metadata["format_version"] = MODEL_FORMAT_VERSION
+    if "calibration" in metadata:
+        metadata["calibration"]["model_id"] = metadata["model_id"]
 
     path = model_path(metadata["model_id"], model_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +127,7 @@ def list_global_models(model_dir=None):
             if (
                 metadata["model_id"] == path.stem
                 and model_path(path.stem, directory).is_file()
-                and metadata["format_version"] == MODEL_FORMAT_VERSION
+                and metadata["format_version"] in (MODEL_FORMAT_VERSION, CALIBRATED_MODEL_FORMAT_VERSION)
                 and metadata["feature_columns"] == expected_columns
             ):
                 models.append(metadata)
@@ -160,6 +164,20 @@ def get_model_config(metadata):
         random_state=metadata.get("random_state", 26))
 
 def validate_feature_policies(metadata, config):
+    if "calibration" in metadata:
+        calibration = metadata["calibration"]
+        restore_calibrator(calibration, config)
+        if metadata.get("format_version") != CALIBRATED_MODEL_FORMAT_VERSION:
+            raise ValueError("Calibration requires model format 2")
+        if metadata.get("model_id") != calibration.get("model_id"):
+            raise ValueError("Calibrator does not belong to this model")
+        if metadata["training_cutoff"] > calibration["start_date"]:
+            raise ValueError("Training overlaps calibration")
+        if not set(calibration["tickers"]).issubset(metadata["train_tickers"]):
+            raise ValueError("Calibration contains tickers outside the training cohort")
+    elif metadata.get("format_version") == CALIBRATED_MODEL_FORMAT_VERSION:
+        raise ValueError("Model format 2 requires calibration metadata")
+
     if "news" in config.feature_groups:
         if metadata.get("news_policy") != NEWS_FEATURE_POLICY:
             raise ValueError("Incompatible news feature policy")
@@ -214,7 +232,7 @@ def load_global_model(model_id, model_dir=None):
         expected_columns = get_feature_columns(config.feature_groups)
         if (
             metadata["model_id"] != model_id
-            or metadata["format_version"] != MODEL_FORMAT_VERSION
+            or metadata["format_version"] not in (MODEL_FORMAT_VERSION, CALIBRATED_MODEL_FORMAT_VERSION)
             or metadata["feature_columns"] != expected_columns
         ):
             raise ValueError("Incompatible model")
@@ -252,17 +270,19 @@ def load_global_model(model_id, model_dir=None):
 
 
 def save_torch_model(model, scaler, metadata, model_dir=None):
-    metadata = dict(metadata)
+    metadata = deepcopy(metadata)
     config = ModelConfig.from_dict(metadata["config"])
     if "market" in config.feature_groups:
         metadata.setdefault("market_policy", deepcopy(MARKET_FEATURE_POLICY))
     if "sector" in config.feature_groups:
         metadata.setdefault("sector_policy", deepcopy(SECTOR_FEATURE_POLICY))
-    metadata["format_version"] = TORCH_MODEL_FORMAT_VERSION
+    metadata["format_version"] = CALIBRATED_MODEL_FORMAT_VERSION if "calibration" in metadata else TORCH_MODEL_FORMAT_VERSION
     metadata["model_id"] = (
         f"{metadata['architecture']}_"
         f"{metadata['training_cutoff']}_"
         f"{uuid4().hex[:8]}")
+    if "calibration" in metadata:
+        metadata["calibration"]["model_id"] = metadata["model_id"]
 
     validate_torch_metadata(metadata)
 
@@ -307,7 +327,7 @@ def load_torch_model(model_id, model_dir=None):
 
 def validate_torch_metadata(metadata):
 
-    if metadata.get("format_version") != TORCH_MODEL_FORMAT_VERSION:
+    if metadata.get("format_version") not in (TORCH_MODEL_FORMAT_VERSION, CALIBRATED_MODEL_FORMAT_VERSION):
         raise ValueError("Unsupported MLP format. Train a new model.")
 
     config = ModelConfig.from_dict(metadata["config"])

@@ -4,11 +4,11 @@ from services.ml.walk_forward_service import RETRAIN_INTERVAL, run_walk_forward,
 from services.ml.data_preparation_service import connect_data, split_dataset_by_date, validate_simulation_dates, prepare_evaluation_data
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.model_config import ModelConfig
-from services.ml.model_store_service import get_active_global_model
+from services.ml.model_store_service import get_active_global_model, build_training_metadata, save_global_model, save_torch_model
 import pandas as pd
 from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters
 from services.ml.evaluation_service import evaluate, predict_baseline
-from services.ml.calibration_service import fit_calibrator, apply_calibrator
+from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator
 
 
 def build_result_row(ticker, model_type, result):
@@ -26,8 +26,7 @@ def build_result_row(ticker, model_type, result):
         "buy_hold_drawdown": result["buyandhold_summary"]["max_drawdown"],
         "excess_return": (result["model_summary"]["total_return"]- result["buyandhold_summary"]["total_return"]),
         "model_exposure": result["model_summary"]["market_exposure"],
-        "transactions": result["model_summary"]["total_transactions"],
-    }
+        "transactions": result["model_summary"]["total_transactions"]}
 
 def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=0.6, *, torch_model_id=None):
     data = get_stock_data(ticker,years=None)
@@ -164,14 +163,32 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
     }
 
 
-def run_model_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, *, calibrate=False, n_estimators=None, epochs=None, learning_rate=None, batch_size=None, patience=None, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None):
+def run_model_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, *, calibrate=False, n_estimators=None, epochs=None, learning_rate=None,
+    batch_size=None, patience=None, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None, save_model=False, model_dir=None):
+
     if calibrate and config.task != "classification":
         raise ValueError("Calibration task not supported.")
 
     parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,batch_size=batch_size, patience=patience)
     evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config,news_start=news_start, prepare_news=prepare_news,sector_assignments=sector_assignments, progress_callback=progress_callback)
 
-    return evaluate_prepared_model(evaluation_data, config, parameters,validation_start=validation_start, calibrate=calibrate,progress_callback=progress_callback)
+    result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
+    if save_model:
+        training_news_end = evaluation_data["news_end"]
+        if training_news_end is not None:
+            training_news_end = min(training_news_end, pd.Timestamp(calibration_start, tz="UTC").isoformat())
+        metadata = build_training_metadata(
+            evaluation_data["final_train_df"], evaluation_data["feature_columns"], config, calibration_start,
+            news_start=evaluation_data["news_start"], news_end=training_news_end)
+        metadata.update(result["training_details"])
+        metadata["evaluation_periods"] = {"validation_start": validation_start, "calibration_start": calibration_start, "test_start": test_start, "test_end": test_end}
+        if calibrate:
+            metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
+        if config.algorithm == "mlp":
+            result["metadata"] = save_torch_model(result["model"], result["scaler"], metadata, model_dir)
+        else:
+            result["metadata"] = save_global_model(result["model"], metadata, model_dir)
+    return result
 
 if __name__ == "__main__":
     seen_test_df, unseen_test_df = run_experiment("2025-01-01", "2025-12-31")
