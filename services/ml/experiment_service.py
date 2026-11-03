@@ -152,6 +152,14 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
         predictions["calibrated_model"] = apply_calibrator(test_predictions, calibrator, config)
 
     metrics = {name: evaluate(frame, config) for name, frame in predictions.items()}
+    cohort_metrics = {"seen": {}, "unseen": {}}
+    training_tickers = evaluation_data["final_train_df"]["ticker"].unique()
+    for name, frame in predictions.items():
+        seen_mask = frame["ticker"].isin(training_tickers)
+        cohorts = {"seen": frame.loc[seen_mask], "unseen": frame.loc[~seen_mask]}
+        for cohort_name, cohort_frame in cohorts.items():
+            if not cohort_frame.empty:
+                cohort_metrics[cohort_name][name] = evaluate(cohort_frame, config)
 
     return {
         "model": model,
@@ -159,18 +167,23 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
         "calibrator": calibrator,
         "training_details": training_details,
         "predictions": predictions,
-        "metrics": metrics
+        "metrics": metrics,
+        "cohort_metrics": cohort_metrics
     }
 
 
-def run_model_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, *, calibrate=False, n_estimators=None, epochs=None, learning_rate=None,
-    batch_size=None, patience=None, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None, save_model=False, model_dir=None):
+def run_model_evaluation(
+    tickers, validation_start, calibration_start, test_start, test_end, config, *,
+    calibrate=False, n_estimators=None, epochs=None, learning_rate=None,
+    batch_size=None, patience=None, news_start=None, prepare_news=True,
+    sector_assignments=None, progress_callback=None, save_model=False,
+    model_dir=None, unseen_tickers=None):
 
     if calibrate and config.task != "classification":
         raise ValueError("Calibration task not supported.")
 
     parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,batch_size=batch_size, patience=patience)
-    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config,news_start=news_start, prepare_news=prepare_news,sector_assignments=sector_assignments, progress_callback=progress_callback)
+    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, news_start=news_start, prepare_news=prepare_news, sector_assignments=sector_assignments, progress_callback=progress_callback, unseen_tickers=unseen_tickers)
 
     result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
     if save_model:
@@ -182,6 +195,7 @@ def run_model_evaluation(tickers, validation_start, calibration_start, test_star
             news_start=evaluation_data["news_start"], news_end=training_news_end)
         metadata.update(result["training_details"])
         metadata["evaluation_periods"] = {"validation_start": validation_start, "calibration_start": calibration_start, "test_start": test_start, "test_end": test_end}
+        metadata["evaluation_cohorts"] = {"training_tickers": evaluation_data["training_tickers"],"unseen_tickers": evaluation_data["unseen_tickers"]}
         if calibrate:
             metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
         if config.algorithm == "mlp":

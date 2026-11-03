@@ -117,9 +117,7 @@ def load_news_features(ticker, start_date, end_date, *, prepare_news=True, refre
     return build_preopen_news_features(news, schedule, range_start, range_end, minutes_before_open=minutes_before_open, history_start=history_start)
 
 
-def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None,
-    feature_groups=("technical",), news_start=None, news_end=None,
-    prepare_news=True, sector_assignments=None):
+def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None, prepare_news=True, sector_assignments=None):
 
     tickers = list(tickers)
     if not tickers:
@@ -341,11 +339,11 @@ def prepare_training_data(
         "news_end": news_end
     }
 
-def prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, *, news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None):
+def prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, *,
+    news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None, unseen_tickers=None):
+
     validate_evaluation_dates(validation_start, calibration_start, test_start, test_end)
-    tickers = list(tickers)
-    if not tickers:
-        raise ValueError("Tickers cannot be empty")
+    training_tickers, unseen_tickers = normalize_evaluation_tickers(tickers, unseen_tickers)
     if config.scope != "global":
         raise ValueError("Expected a global model configuration")
 
@@ -354,19 +352,62 @@ def prepare_evaluation_data(tickers, validation_start, calibration_start, test_s
     if "news" in config.feature_groups:
         news_start, news_end = normalize_training_news_range(news_start, test_end, test_end)
 
-    data = connect_data(
-        tickers, progress_callback=progress_callback, horizon=config.horizon,
+    data = connect_data(training_tickers + unseen_tickers, progress_callback=progress_callback, horizon=config.horizon,
         feature_columns=feature_columns, feature_groups=config.feature_groups,
         news_start=news_start, news_end=news_end, prepare_news=prepare_news,
         sector_assignments=sector_assignments)
 
-    result = split_evaluation_data(data, validation_start, calibration_start, test_start, test_end)
-    missing_tickers = sorted(set(tickers) - set(result["final_train_df"]["ticker"]))
-    if missing_tickers:
-        raise ValueError(f"No training data before choosen date: {missing_tickers}.")
+    training_data = data.loc[data["ticker"].isin(training_tickers)].copy()
+    unseen_data = data.loc[data["ticker"].isin(unseen_tickers)].copy()
 
+    result = split_evaluation_data(training_data, validation_start, calibration_start, test_start, test_end)
+    _, unseen_test_df = split_dataset_by_date(unseen_data, test_start, test_end)
+
+    missing_tickers = sorted(set(training_tickers) - set(result["final_train_df"]["ticker"]))
+    if missing_tickers:
+        raise ValueError(f"No training data before chosen date: {missing_tickers}.")
+
+    missing_unseen_tickers = sorted(set(unseen_tickers) - set(unseen_test_df["ticker"]))
+    if missing_unseen_tickers:
+        raise ValueError(f"No test data for unseen tickers: {missing_unseen_tickers}.")
+
+    result["seen_test_df"] = result["test_df"].copy()
+    result["unseen_test_df"] = unseen_test_df
+    if unseen_tickers:
+        result["test_df"] = pd.concat([result["seen_test_df"], unseen_test_df], ignore_index=True)
+    result["training_tickers"] = training_tickers
+    result["unseen_tickers"] = unseen_tickers
     result["feature_columns"] = feature_columns
     result["news_start"] = news_start
     result["news_end"] = news_end
 
     return result
+
+def normalize_evaluation_tickers(training_tickers, unseen_tickers=None):
+    if isinstance(training_tickers, (str, bytes)) or isinstance(unseen_tickers, (str, bytes)):
+        raise ValueError("Tickers must be collections, not single strings")
+
+    try:
+        training_tickers = list(training_tickers)
+        unseen_tickers = [] if unseen_tickers is None else list(unseen_tickers)
+    except TypeError as error:
+        raise ValueError("Tickers must be iterable collections") from error
+    if not training_tickers:
+        raise ValueError("Training tickers cannot be empty")
+
+    if any(not isinstance(ticker, str) or not ticker.strip() for ticker in training_tickers + unseen_tickers):
+        raise ValueError("Every ticker must be a non-empty string")
+
+    training_tickers = [ticker.strip().upper() for ticker in training_tickers]
+    unseen_tickers = [ticker.strip().upper() for ticker in unseen_tickers]
+    if len(training_tickers) != len(set(training_tickers)):
+        raise ValueError("Duplicate training tickers")
+    if len(unseen_tickers) != len(set(unseen_tickers)):
+        raise ValueError("Duplicate unseen tickers")
+
+    doubled = sorted(set(training_tickers) & set(unseen_tickers))
+
+    if doubled:
+        raise ValueError(f"Tickers cannot belong to both groups: {doubled}")
+
+    return training_tickers, unseen_tickers
