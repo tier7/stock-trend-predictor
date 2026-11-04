@@ -7,7 +7,9 @@ from services.ml.model_config import ModelConfig
 from services.ml.evaluation_universe import UNSEEN_TICKERS
 from services.ml.model_store_service import get_active_global_model, build_training_metadata, save_global_model, save_torch_model
 import pandas as pd
-from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters
+from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters, blend_predictions
+from services.ml.model_service import resolve_hybrid_parameters
+from services.ml.stacking_service import fit_stacking_model, apply_stacking_model
 from services.ml.evaluation_service import evaluate, predict_baseline
 from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator
 from uuid import uuid4
@@ -17,6 +19,7 @@ import platform
 from importlib.metadata import version
 import joblib
 from hashlib import sha256
+from dataclasses import replace
 
 def build_result_row(ticker, model_type, result):
     return {
@@ -310,6 +313,65 @@ def repeat_model_evaluation(report_dir, progress_callback=None):
     result["source_metadata"] = metadata
     return result
 
+
+def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validation_start=None, progress_callback=None, method="blend", stacking_splits=5):
+
+    parameters = resolve_hybrid_parameters(config, model_parameters, method, stacking_splits)
+    stacking_model = None
+    stacking_training_data = None
+    stacking_training_details = {}
+    if method == "stacking":
+        stacking_model, stacking_training_data, stacking_training_details = fit_stacking_model(evaluation_data, config, parameters, n_splits=stacking_splits, progress_callback=progress_callback)
+
+    model_results = {}
+    for algorithm, options in parameters.items():
+        model_config = replace(config, algorithm=algorithm)
+        model_results[algorithm] = evaluate_prepared_model(evaluation_data, model_config, options, validation_start=validation_start,progress_callback=progress_callback)
+
+    predictions = {name: result["predictions"]["model"] for name, result in model_results.items()}
+    metrics = {name: result["metrics"]["model"] for name, result in model_results.items()}
+
+    if method == "blend":
+        combined = blend_predictions(predictions.values(), config.task)
+    else:
+        combined = apply_stacking_model(predictions, stacking_model, config)
+
+    predictions[method] = combined
+    metrics[method] = evaluate(combined, config)
+
+    first_result = next(iter(model_results.values()))
+    predictions["baseline"] = first_result["predictions"]["baseline"]
+    metrics["baseline"] = first_result["metrics"]["baseline"]
+    training_tickers = evaluation_data["final_train_df"]["ticker"].unique()
+    seen_mask = combined["ticker"].isin(training_tickers)
+    groups = {"seen": combined.loc[seen_mask], "unseen": combined.loc[~seen_mask]}
+    group_metrics = {"seen": {}, "unseen": {}}
+    for group_name, frame in groups.items():
+        if not frame.empty:
+            for algorithm, result in model_results.items():
+                group_metrics[group_name][algorithm] = result["cohort_metrics"][group_name]["model"]
+            group_metrics[group_name]["baseline"] = first_result["cohort_metrics"][group_name]["baseline"]
+            group_metrics[group_name][method] = evaluate(frame, config)
+
+    return {
+        "method": method,
+        "model_results": model_results,
+        "stacking_model": stacking_model,
+        "stacking_training_data": stacking_training_data,
+        "stacking_training_details": stacking_training_details,
+        "predictions": predictions,
+        "metrics": metrics,
+        "cohort_metrics": group_metrics}
+
+
+def run_hybrid_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, model_parameters, *, train_start=None, news_start=None, prepare_news=True, sector_assignments=None, unseen_tickers=None, progress_callback=None, method="blend", stacking_splits=5):
+    parameters = resolve_hybrid_parameters(config, model_parameters, method, stacking_splits)
+    evaluation_data = prepare_evaluation_data(
+        tickers, validation_start, calibration_start, test_start, test_end, config,
+        train_start=train_start, news_start=news_start, prepare_news=prepare_news,
+        sector_assignments=sector_assignments, unseen_tickers=unseen_tickers, progress_callback=progress_callback)
+
+    return evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start, progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
 
 
 if __name__ == "__main__":

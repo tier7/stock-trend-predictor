@@ -83,6 +83,8 @@ def create_tables():
         )
     """)
 
+    cur.execute("CREATE INDEX IF NOT EXISTS news_articles_symbols_idx ON news_articles USING GIN (symbols)")
+
     conn.commit()
     conn.close()
 

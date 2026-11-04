@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 from services.stock_data_quality_service import filter_valid_ohlc
 
-def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
+def fetch_stock_data(ticker, interval="1d", period="max", start_date=None, end_date=None):
     print("FETCH PARAMS:")
     print("ticker:", ticker)
     print("interval:", interval)
@@ -11,9 +11,9 @@ def fetch_stock_data(ticker, interval="1d", period="max", start_date=None):
 
     try:
         if start_date is None:
-            data = yf.download(ticker, period=period, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True)
+            data = yf.download(ticker, period=period, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True, end=end_date)
         else:
-            data = yf.download(ticker, start=start_date, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True)
+            data = yf.download(ticker, start=start_date, interval=interval, multi_level_index=False, actions=True,progress=False, repair=True, end=end_date)
 
     except Exception as error:
         print(f"Error while downloading data: {ticker}: {error}")

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from math import isfinite
 
 import pandas as pd
@@ -13,6 +14,8 @@ from services.ml.model_store_service import (build_training_metadata, save_globa
 from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, build_backtest_result
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
 from services.ml.calibration_service import apply_saved_calibration
+
+
 
 def resolve_training_parameters(config, *, n_estimators=None, epochs=None, learning_rate=None, batch_size=None, patience=None):
     if config.algorithm == "mlp":
@@ -277,4 +280,68 @@ def predict_latest(data, model_id, model_dir=None, *, ticker=None, as_of=None,pr
             raise ValueError(
                 "The market opened while preparing the forecast; "
                 "the upcoming-open decision is no longer available")
+    return result
+
+def resolve_hybrid_parameters(config, model_parameters, method="blend", stacking_splits=5):
+    if method not in ("blend", "stacking"):
+        raise ValueError("Hybrid method must be blend or stacking")
+    if config.scope != "global":
+        raise ValueError("Expected a global model configuration")
+    if not isinstance(model_parameters, dict) or len(model_parameters) < 2:
+        raise ValueError("Must provide at least two algorithms")
+    if method == "stacking" and (type(stacking_splits) is not int or stacking_splits < 2):
+        raise ValueError("stacking_splits must be an integer of at least 2")
+    parameters = {}
+    for algorithm, options in model_parameters.items():
+        if not isinstance(options, dict):
+            raise ValueError("Each algorithm requires a dictionary of training parameters")
+        parameters[algorithm] = resolve_training_parameters(replace(config, algorithm=algorithm), **options)
+    return parameters
+
+
+def prepare_ensemble_features(predictions, task):
+    if task not in ("classification", "regression"):
+        raise ValueError("Unsupported task")
+    predictions = list(predictions)
+    if len(predictions) < 2:
+        raise ValueError("Combining requires at least two prediction dataframes")
+    if any(frame.empty for frame in predictions):
+        raise ValueError("Prediction dataframes cannot be empty")
+    result = predictions[0].copy()
+    identity_columns = ["ticker", "date", "next_date", "target_end_date"]
+    for column in ("decision_at", "execution_date"):
+        if any(column in frame.columns for frame in predictions):
+            identity_columns.append(column)
+    features = pd.DataFrame(index=result.index)
+    prediction_column = "probability_up" if task == "classification" else "predicted_return"
+
+    for index, frame in enumerate(predictions):
+        if not set(identity_columns).issubset(frame.columns):
+            raise ValueError("Missing prediction identity columns")
+        if frame[identity_columns].isna().any(axis=None):
+            raise ValueError("Prediction identity columns cannot contain empty values")
+        if frame.duplicated(["ticker", "date"]).any():
+            raise ValueError("Duplicated predictions for the same ticker and date")
+        if not result[identity_columns].equals(frame[identity_columns]):
+            raise ValueError("Predictions must describe the same rows in the same order")
+        if prediction_column not in frame.columns:
+            raise ValueError(f"Missing prediction column: {prediction_column}")
+        values = frame[prediction_column]
+        if values.isna().any() or not values.map(isfinite).all():
+            raise ValueError("Predictions must contain finite numbers")
+        if task == "classification" and not values.between(0, 1).all():
+            raise ValueError("Probabilities must be between 0 and 1")
+        features[index] = values.to_numpy(dtype=float)
+    return result, features
+
+
+def blend_predictions(predictions, task):
+    result, features = prepare_ensemble_features(predictions, task)
+    prediction_column = "probability_up" if task == "classification" else "predicted_return"
+    result[prediction_column] = 0.0
+    for column in features:
+        result[prediction_column] += features[column]
+    result[prediction_column] = result[prediction_column] / len(features.columns)
+    if task == "classification":
+        result["prediction"] = (result["probability_up"] >= 0.5).astype(int)
     return result
