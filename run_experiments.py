@@ -1,4 +1,4 @@
-from services.ml.experiment_service import run_experiments
+from services.ml.evaluation_universe import ALL_TICKERS
 import pandas as pd
 from pathlib import Path
 from services.ml.experiment_service import run_experiments, summarize_results
@@ -10,15 +10,7 @@ periods = [
     {"name": "2026_Q2", "start_date": "2026-04-01", "end_date": "2026-06-30"},
     {"name": "2026_Q3", "start_date": "2026-07-01", "end_date": "2026-09-30"},
 ]
-tickers = [
-    # Spółki obecne w treningu
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META",
-    "JNJ", "KO", "PG", "CAT", "BRK-B",
-
-    # Spółki nieobecne w treningu
-    "NVDA", "AMD", "JPM", "BAC", "PFE",
-    "LLY", "XOM", "CVX", "VZ", "T",
-]
+tickers = list(ALL_TICKERS)
 model_types = ["global", "local", "mlp"]
 
 if __name__ == "__main__":

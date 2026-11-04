@@ -5,6 +5,7 @@ import sklearn
 import lightgbm
 
 from services.ml.model_config import ModelConfig
+from services.ml.evaluation_universe import SEEN_TICKERS as DEFAULT_TRAINING_TICKERS
 from services.ml.data_preparation_service import prepare_training_data, prepare_prediction_data, prepare_latest_prediction_data, validate_simulation_dates
 from services.ml.tree_model_service import fit as fit_tree, predict as predict_tree
 from services.ml.mlp_service import fit as fit_mlp, predict as predict_mlp
@@ -12,18 +13,6 @@ from services.ml.model_store_service import (build_training_metadata, save_globa
 from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, build_backtest_result
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
 from services.ml.calibration_service import apply_saved_calibration
-
-DEFAULT_TRAINING_TICKERS = (
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-    'TSLA', 'INTC', 'ORCL', 'GS', 'V',
-    'MA', 'BRK-B', 'JNJ', 'UNH', 'ABBV',
-    'SHEL', 'NEE', 'KO', 'PEP', 'MCD',
-    'SBUX', 'WMT', 'COST', 'PG', 'NKE',
-    'MC.PA', 'DIS', 'NFLX', 'CMCSA', 'TMUS',
-    'BA', 'AIR.PA', 'LMT', 'CAT', 'DE',
-    'UNP', 'FDX', 'UPS', 'O', 'AMT'
-)
-
 
 def resolve_training_parameters(config, *, n_estimators=None, epochs=None, learning_rate=None, batch_size=None, patience=None):
     if config.algorithm == "mlp":

@@ -4,18 +4,17 @@ services:
     ports:
       - "5001:5001"
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/stocks
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/stocks
     depends_on:
       - db
   db:
     image: postgres:18
-    container_name: stock-trend-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Ustaw POSTGRES_PASSWORD w .env}
       POSTGRES_DB: stocks
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
 

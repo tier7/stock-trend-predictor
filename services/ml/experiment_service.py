@@ -4,12 +4,19 @@ from services.ml.walk_forward_service import RETRAIN_INTERVAL, run_walk_forward,
 from services.ml.data_preparation_service import connect_data, split_dataset_by_date, validate_simulation_dates, prepare_evaluation_data
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.model_config import ModelConfig
+from services.ml.evaluation_universe import UNSEEN_TICKERS
 from services.ml.model_store_service import get_active_global_model, build_training_metadata, save_global_model, save_torch_model
 import pandas as pd
 from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters
 from services.ml.evaluation_service import evaluate, predict_baseline
 from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator
-
+from uuid import uuid4
+import json
+from pathlib import Path
+import platform
+from importlib.metadata import version
+import joblib
+from hashlib import sha256
 
 def build_result_row(ticker, model_type, result):
     return {
@@ -101,9 +108,6 @@ def summarize_results(report):
 
     return pd.DataFrame(summary)
 
-UNSEEN_TICKERS = ("NVDA", "AMD", "JPM", "BAC", "PFE", "LLY", "XOM", "CVX", "VZ", "T")
-
-
 def run_experiment(start_date, end_date):
     validate_simulation_dates(start_date, end_date)
     train_tickers = list(DEFAULT_TRAINING_TICKERS)
@@ -172,37 +176,141 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
     }
 
 
+
+def save_evaluation_results(result, report_dir, evaluation_data):
+    metadata = result["evaluation_metadata"]
+    evaluation_id = metadata["evaluation_id"]
+    payload = json.dumps(metadata, ensure_ascii=False, indent=2, allow_nan=False)
+    metric_groups = {"all": result["metrics"], "seen": result["cohort_metrics"]["seen"], "unseen": result["cohort_metrics"]["unseen"]}
+    metric_rows = []
+
+    for group_name, variants in metric_groups.items():
+        for variant_name, metrics in variants.items():
+            row = {"evaluation_id": evaluation_id, "group": group_name, "variant": variant_name, "rows": int(len(metrics["predictions"]))}
+
+            for metric_name, value in metrics.items():
+                if metric_name in ("predictions", "probability_up"):
+                    continue
+
+                if metric_name == "confusion_matrix":
+                    row.update({name: int(count) for name, count in value.items()})
+                else:
+                    row[metric_name] = float(value)
+
+            metric_rows.append(row)
+
+    columns = ["ticker", "date", "next_date", "target_end_date", "target_return"]
+    if metadata["config"]["task"] == "classification":
+        columns.extend(["target", "probability_up", "prediction"])
+    else:
+        columns.append("predicted_return")
+
+    prediction_frames = []
+    training_tickers = metadata["evaluation_cohorts"]["training_tickers"]
+
+    for variant_name, frame in result["predictions"].items():
+        selected_columns = columns + (["sector_benchmark"] if "sector_benchmark" in frame.columns else [])
+        predictions = frame[selected_columns].copy()
+        groups = predictions["ticker"].isin(training_tickers).map({True: "seen", False: "unseen"})
+        predictions.insert(0, "group", groups)
+        predictions.insert(0, "variant", variant_name)
+        predictions.insert(0, "evaluation_id", evaluation_id)
+        prediction_frames.append(predictions)
+
+    metrics_df = pd.DataFrame(metric_rows)
+    predictions_df = pd.concat(prediction_frames, ignore_index=True)
+
+    directory = Path(report_dir) / evaluation_id
+    directory.mkdir(parents=True, exist_ok=False)
+    (directory / "metadata.json").write_text(payload + "\n", encoding="utf-8")
+    metrics_df.to_csv(directory / "metrics.csv", index=False, encoding="utf-8")
+    predictions_df.to_csv(directory / "predictions.csv", index=False, encoding="utf-8")
+
+
+    snapshot = {name: value for name, value in evaluation_data.items() if name not in ("seen_test_df", "unseen_test_df")}
+    joblib.dump(snapshot, directory / "datasets.joblib", compress=3)
+
+    return str(directory)
+
+
 def run_model_evaluation(
     tickers, validation_start, calibration_start, test_start, test_end, config, *,
     calibrate=False, n_estimators=None, epochs=None, learning_rate=None,
     batch_size=None, patience=None, news_start=None, prepare_news=True,
     sector_assignments=None, progress_callback=None, save_model=False,
-    model_dir=None, unseen_tickers=None):
+    model_dir=None, unseen_tickers=None, report_dir=None, train_start=None):
 
     if calibrate and config.task != "classification":
         raise ValueError("Calibration task not supported.")
 
     parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,batch_size=batch_size, patience=patience)
-    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, news_start=news_start, prepare_news=prepare_news, sector_assignments=sector_assignments, progress_callback=progress_callback, unseen_tickers=unseen_tickers)
+
+    project_dir = Path(__file__).resolve().parents[2]
+    source_files = sorted(project_dir.glob("*.py")) + sorted((project_dir / "services").rglob("*.py"))
+    code_hashes = {path.relative_to(project_dir).as_posix(): sha256(path.read_bytes()).hexdigest() for path in source_files}
+
+    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, news_start=news_start, prepare_news=prepare_news, sector_assignments=sector_assignments, progress_callback=progress_callback, unseen_tickers=unseen_tickers, train_start=train_start)
 
     result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
+    training_news_end = evaluation_data["news_end"]
+    if training_news_end is not None:
+        training_news_end = min(training_news_end, pd.Timestamp(calibration_start, tz="UTC").isoformat())
+
+    metadata = build_training_metadata(evaluation_data["final_train_df"], evaluation_data["feature_columns"], config, calibration_start,news_start=evaluation_data["news_start"], news_end=training_news_end)
+    metadata.update(result["training_details"])
+    metadata["code_hashes"] = code_hashes
+
+    metadata["environment"] = {
+        "python": platform.python_version(),
+        "numpy": version("numpy"),
+        "pandas": version("pandas"),
+        "scikit-learn": version("scikit-learn"),
+        "torch": version("torch"),
+        "lightgbm": version("lightgbm"),
+        "joblib": version("joblib")}
+
+    metadata["evaluation_id"] = f"evaluation_{uuid4().hex}"
+    metadata["evaluation_parameters"] = dict(parameters)
+    metadata["evaluation_periods"] = {
+        "train_start": train_start,
+        "validation_start": validation_start,
+        "calibration_start": calibration_start,
+        "test_start": test_start,
+        "test_end": test_end}
+    metadata["evaluation_cohorts"] = {"training_tickers": evaluation_data["training_tickers"], "unseen_tickers": evaluation_data["unseen_tickers"]}
+    metadata["evaluation_news_range"] = {"start": evaluation_data["news_start"], "end": evaluation_data["news_end"]}
+    metadata["calibration_enabled"] = calibrate
+
+    dataset_names = ("selection_train_df", "validation_df", "final_train_df", "calibration_df","seen_test_df", "unseen_test_df", "test_df")
+    metadata["dataset_rows"] = {name: int(len(evaluation_data[name])) for name in dataset_names}
+
+    if calibrate:
+        metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config,calibration_start, test_start)
+
     if save_model:
-        training_news_end = evaluation_data["news_end"]
-        if training_news_end is not None:
-            training_news_end = min(training_news_end, pd.Timestamp(calibration_start, tz="UTC").isoformat())
-        metadata = build_training_metadata(
-            evaluation_data["final_train_df"], evaluation_data["feature_columns"], config, calibration_start,
-            news_start=evaluation_data["news_start"], news_end=training_news_end)
-        metadata.update(result["training_details"])
-        metadata["evaluation_periods"] = {"validation_start": validation_start, "calibration_start": calibration_start, "test_start": test_start, "test_end": test_end}
-        metadata["evaluation_cohorts"] = {"training_tickers": evaluation_data["training_tickers"],"unseen_tickers": evaluation_data["unseen_tickers"]}
-        if calibrate:
-            metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
         if config.algorithm == "mlp":
             result["metadata"] = save_torch_model(result["model"], result["scaler"], metadata, model_dir)
         else:
             result["metadata"] = save_global_model(result["model"], metadata, model_dir)
+
+    result["evaluation_metadata"] = result.get("metadata", metadata)
+    if report_dir is not None:
+        result["report_dir"] = save_evaluation_results(result, report_dir, evaluation_data)
+
     return result
+
+
+def repeat_model_evaluation(report_dir, progress_callback=None):
+    directory = Path(report_dir)
+    metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    config = ModelConfig.from_dict(metadata["config"])
+    parameters = resolve_training_parameters(config, **metadata["evaluation_parameters"])
+    evaluation_data = joblib.load(directory / "datasets.joblib")
+    result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=metadata["evaluation_periods"]["validation_start"], calibrate=metadata["calibration_enabled"], progress_callback=progress_callback)
+    result["source_metadata"] = metadata
+    return result
+
+
 
 if __name__ == "__main__":
     seen_test_df, unseen_test_df = run_experiment("2025-01-01", "2025-12-31")

@@ -1,4 +1,7 @@
+from copy import deepcopy
+
 import pandas as pd
+from services.news_symbol_service import NEWS_SYMBOL_POLICY
 from services.ml.finbert_service import MODEL_NAME, MODEL_REVISION
 from services.ml.prediction_time_service import (DEFAULT_MARKET_CALENDAR,NEWS_MINUTES_BEFORE_OPEN,build_market_schedule,build_preopen_schedule)
 from services.ml.feature_schema import NEWS_BASE_FEATURE_COLUMNS, NEWS_FEATURE_COLUMNS
@@ -12,12 +15,13 @@ NEWS_FEATURE_POLICY = {
     "calendar_name": DEFAULT_MARKET_CALENDAR,
     "minutes_before_open": NEWS_MINUTES_BEFORE_OPEN,
     "window": "previous_close_to_preopen",
-    "relevance_filter": "single_ticker",
+    "relevance_filter": "single_company",
+    "symbols": deepcopy(NEWS_SYMBOL_POLICY),
     "sentiment_score": "positive_mean_minus_negative_mean",
     "sentiment_5d": "news_count_weighted_mean_over_5_sessions",
     "sentiment_change": "current_minus_previous_when_both_have_news",
     "history_sessions": NEWS_HISTORY_SESSIONS,
-    "version": 2
+    "version": 3
 }
 
 def normalize_training_news_range(news_start, news_end, training_cutoff):

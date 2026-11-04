@@ -4,6 +4,7 @@ import os
 import psycopg
 from services.stock_data_quality_service import VALID_OHLC_SQL, filter_valid_ohlc
 from psycopg.rows import dict_row
+from services.news_symbol_service import get_news_symbols, normalize_news_ticker
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -265,8 +266,8 @@ def get_news(ticker):
 
     cur.execute(f"""SELECT article_id, headline, symbols, created_at, updated_at
     FROM news_articles
-    WHERE %s = ANY(symbols)
-    ORDER BY created_at, article_id, updated_at""", (ticker.upper(),))
+    WHERE symbols && %s::text[]
+    ORDER BY created_at, article_id, updated_at""", (get_news_symbols(ticker),))
 
     articles = cur.fetchall()
 
@@ -311,7 +312,7 @@ def get_news_without_sentiment(ticker, model_name, model_revision, *,start_date=
     query = """
         SELECT n.article_id, n.headline, n.symbols, n.created_at, n.updated_at
         FROM news_articles AS n
-        WHERE %s = ANY(n.symbols)
+        WHERE n.symbols && %s::text[]
         AND NOT EXISTS (
             SELECT 1
             FROM news_sentiments AS s
@@ -320,7 +321,7 @@ def get_news_without_sentiment(ticker, model_name, model_revision, *,start_date=
             AND s.model_name = %s
             AND s.model_revision = %s)"""
 
-    params = [ticker.upper(), model_name, model_revision]
+    params = [get_news_symbols(ticker), model_name, model_revision]
 
     if start_date is not None:
         range_start = pd.to_datetime(start_date, utc=True)
@@ -357,10 +358,10 @@ def get_news_with_sentiment(ticker, model_name, model_revision):
     JOIN news_sentiments AS s
     ON s.article_id = n.article_id
     AND s.article_updated_at = n.updated_at
-    WHERE %s = ANY(n.symbols)
+    WHERE n.symbols && %s::text[]
     AND s.model_name = %s
     AND s.model_revision = %s
-    ORDER BY n.created_at, n.article_id, n.updated_at""", (ticker.upper(), model_name, model_revision))
+    ORDER BY n.created_at, n.article_id, n.updated_at""", (get_news_symbols(ticker), model_name, model_revision))
 
     articles = cur.fetchall()
     conn.close()
@@ -377,7 +378,7 @@ def get_news_imports(ticker, start_date, end_date):
             FROM news_imports
             WHERE ticker = %s AND start_at < %s AND end_at > %s
             ORDER BY start_at, end_at
-        """, (ticker.upper(), end_date, start_date))
+        """, (normalize_news_ticker(ticker), end_date, start_date))
         return cur.fetchall()
     finally:
         conn.close()
@@ -391,7 +392,7 @@ def save_news_import(ticker, start_date, end_date, fetched_count):
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (ticker, start_at, end_at) DO UPDATE SET
         fetched_count = EXCLUDED.fetched_count, completed_at = NOW()
-        """, (ticker.upper(), start_date, end_date, fetched_count))
+        """, (normalize_news_ticker(ticker), start_date, end_date, fetched_count))
         saved_count = cur.rowcount
         conn.commit()
         return saved_count

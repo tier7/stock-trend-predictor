@@ -6,6 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
+from services.news_symbol_service import get_news_symbols, normalize_news_ticker
 from services.ml.finbert_service import FinbertAnalyzer, MODEL_NAME, MODEL_REVISION
 from services.db import (
     create_tables,
@@ -48,7 +49,7 @@ def fetch_news(ticker, start_date, end_date, page_token=None):
     }
 
     params = {
-        "symbols": ticker,
+        "symbols": ",".join(get_news_symbols(ticker, as_of=end_date)),
         "start": start_date,
         "end": end_date,
         "limit": 50,
@@ -97,13 +98,19 @@ def fetch_all_news(ticker, start_date, end_date):
             )
         seen_tokens.add(page_token)
 
-    return articles
+    return list({(article["id"], article["updated_at"]): article for article in articles}.values())
 
 
 def classify_news_relevance(article, ticker):
     headline = article.get("headline")
     tickers = set(article.get("symbols") or [])
-
+    ticker = normalize_news_ticker(ticker)
+    created_at = None
+    if ticker == "META":
+        created_at = pd.to_datetime(article.get("created_at"), utc=True, errors="coerce")
+        if created_at is None or pd.isna(created_at):
+            return {"use_for_model": False, "reason": "invalid_created_at"}
+    aliases = set(get_news_symbols(ticker, as_of=created_at))
 
     if not isinstance(headline, str) or not headline.strip():
         return {
@@ -115,12 +122,12 @@ def classify_news_relevance(article, ticker):
             "use_for_model": False,
             "reason": "missing_symbols"
         }
-    elif ticker not in tickers:
+    elif not tickers.intersection(aliases):
         return {
             "use_for_model": False,
             "reason": "ticker_not_mentioned"
         }
-    elif ticker in tickers and len(tickers) == 1:
+    elif tickers.issubset(aliases):
         return {
             "use_for_model": True,
             "reason": "single_ticker"
@@ -185,7 +192,7 @@ def import_news_range(
     ticker, start_date, end_date, *, as_of=None, refresh=False,
     progress_callback=None,
 ):
-    ticker = ticker.upper()
+    ticker = normalize_news_ticker(ticker)
 
 
     range_start = pd.to_datetime(start_date, utc=True)
@@ -302,7 +309,7 @@ def score_pending_news(
     ticker, analyzer, *, start_date=None, end_date=None,
     progress_callback=None,
 ):
-    ticker = ticker.upper()
+    ticker = normalize_news_ticker(ticker)
     pending = get_news_without_sentiment(ticker, MODEL_NAME, MODEL_REVISION, start_date=start_date, end_date=end_date)
     results = []
     inserted_count = 0
@@ -332,7 +339,7 @@ def score_pending_news(
     return inserted_count
 
 def ensure_news_data(ticker, start_date, end_date, *,analyzer=None,refresh=False,as_of=None,progress_callback=None, history_start=None):
-    ticker = ticker.upper()
+    ticker = normalize_news_ticker(ticker)
 
     if progress_callback:
         progress_callback(f"{ticker}: Przygotowywanie wiadomości.")
@@ -416,8 +423,7 @@ if __name__ == "__main__":
             periods[-1]["end_date"],
             analyzer=analyzer,
             as_of=import_as_of,
-            progress_callback=print,
-        )
+            progress_callback=print)
         print(ticker, result)
 
 

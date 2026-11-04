@@ -186,7 +186,7 @@ def validate_simulation_dates(start_date, end_date):
         raise ValueError("End date must be greater than start date.")
 
 
-def validate_evaluation_dates(validation_start, calibration_start, test_start, test_end):
+def validate_evaluation_dates(validation_start, calibration_start, test_start, test_end, *, train_start=None):
     validate_date(validation_start, "Validation start date")
     validate_date(test_start, "Test start date")
     validate_date(test_end, "Test end date")
@@ -194,11 +194,17 @@ def validate_evaluation_dates(validation_start, calibration_start, test_start, t
 
     if not (validation_start < calibration_start < test_start < test_end):
         raise ValueError("Invalid dates order.")
+    if train_start is not None:
+        validate_date(train_start, "Training start date")
+        if train_start >= validation_start:
+            raise ValueError("Invalid dates order.")
 
-def split_evaluation_data(data, validation_start, calibration_start, test_start, test_end):
-    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end)
+def split_evaluation_data(data, validation_start, calibration_start, test_start, test_end, *, train_start=None):
+    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end, train_start=train_start)
     if data.empty:
         raise ValueError("No data to split.")
+    if train_start is not None:
+        data = data.loc[data["date"] >= train_start]
 
     selection_train_df, validation_df = split_dataset_by_date(data, validation_start, calibration_start)
     final_train_df, calibration_df = split_dataset_by_date(data, calibration_start,test_start)
@@ -340,9 +346,9 @@ def prepare_training_data(
     }
 
 def prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, *,
-    news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None, unseen_tickers=None):
+    news_start=None, prepare_news=True, sector_assignments=None, progress_callback=None, unseen_tickers=None, train_start=None):
 
-    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end)
+    validate_evaluation_dates(validation_start, calibration_start, test_start, test_end, train_start=train_start)
     training_tickers, unseen_tickers = normalize_evaluation_tickers(tickers, unseen_tickers)
     if config.scope != "global":
         raise ValueError("Expected a global model configuration")
@@ -360,7 +366,7 @@ def prepare_evaluation_data(tickers, validation_start, calibration_start, test_s
     training_data = data.loc[data["ticker"].isin(training_tickers)].copy()
     unseen_data = data.loc[data["ticker"].isin(unseen_tickers)].copy()
 
-    result = split_evaluation_data(training_data, validation_start, calibration_start, test_start, test_end)
+    result = split_evaluation_data(training_data, validation_start, calibration_start, test_start, test_end, train_start=train_start)
     _, unseen_test_df = split_dataset_by_date(unseen_data, test_start, test_end)
 
     missing_tickers = sorted(set(training_tickers) - set(result["final_train_df"]["ticker"]))
