@@ -5,11 +5,11 @@ from services.ml.data_preparation_service import connect_data, split_dataset_by_
 from services.ml.dataset_service import FEATURE_COLUMNS
 from services.ml.model_config import ModelConfig
 from services.ml.evaluation_universe import UNSEEN_TICKERS
-from services.ml.model_store_service import get_active_global_model, build_training_metadata, save_global_model, save_torch_model
+from services.ml.model_store_service import get_active_global_model, build_training_metadata, save_global_model, save_torch_model, save_hybrid_model
 import pandas as pd
 from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters, blend_predictions
-from services.ml.model_service import resolve_hybrid_parameters
-from services.ml.stacking_service import fit_stacking_model, apply_stacking_model
+from services.ml.model_service import resolve_hybrid_parameters, apply_stacking_model
+from services.ml.stacking_service import fit_stacking_model
 from services.ml.evaluation_service import evaluate, predict_baseline
 from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator
 from uuid import uuid4
@@ -20,6 +20,7 @@ from importlib.metadata import version
 import joblib
 from hashlib import sha256
 from dataclasses import replace
+from copy import deepcopy
 
 def build_result_row(ticker, model_type, result):
     return {
@@ -180,6 +181,51 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
 
 
 
+def build_evaluation_metadata(
+    evaluation_data, config, parameters, validation_start, calibration_start, test_start, test_end, *,
+    train_start=None, calibrate=False, method="single", stacking_splits=None):
+    if method not in ("single", "blend", "stacking"):
+        raise ValueError("Unsupported evaluation method")
+    training_news_end = evaluation_data["news_end"]
+    if training_news_end is not None:
+        training_news_end = min(training_news_end, pd.Timestamp(calibration_start, tz="UTC").isoformat())
+    metadata = build_training_metadata(
+        evaluation_data["final_train_df"], evaluation_data["feature_columns"], config, calibration_start,
+        news_start=evaluation_data["news_start"], news_end=training_news_end)
+    project_dir = Path(__file__).resolve().parents[2]
+    source_files = sorted(project_dir.glob("*.py")) + sorted((project_dir / "services").rglob("*.py"))
+    metadata["code_hashes"] = {path.relative_to(project_dir).as_posix(): sha256(path.read_bytes()).hexdigest() for path in source_files}
+    metadata["environment"] = {
+        "python": platform.python_version(),
+        "numpy": version("numpy"),
+        "pandas": version("pandas"),
+        "scikit-learn": version("scikit-learn"),
+        "torch": version("torch"),
+        "lightgbm": version("lightgbm"),
+        "joblib": version("joblib")}
+    metadata["evaluation_id"] = f"evaluation_{uuid4().hex}"
+    metadata["evaluation_method"] = method
+    metadata["evaluation_parameters"] = deepcopy(parameters)
+    metadata["evaluation_periods"] = {
+        "train_start": train_start,
+        "validation_start": validation_start,
+        "calibration_start": calibration_start,
+        "test_start": test_start,
+        "test_end": test_end}
+    metadata["evaluation_cohorts"] = {
+        "training_tickers": list(evaluation_data["training_tickers"]),
+        "unseen_tickers": list(evaluation_data["unseen_tickers"])}
+    metadata["evaluation_news_range"] = {"start": evaluation_data["news_start"], "end": evaluation_data["news_end"]}
+    metadata["calibration_enabled"] = calibrate
+    dataset_names = ("selection_train_df", "validation_df", "final_train_df", "calibration_df", "seen_test_df", "unseen_test_df", "test_df")
+    metadata["dataset_rows"] = {name: int(len(evaluation_data[name])) for name in dataset_names}
+    if method != "single":
+        metadata["component_algorithms"] = list(parameters)
+    if method == "stacking":
+        metadata["stacking_splits"] = stacking_splits
+    return metadata
+
+
 def save_evaluation_results(result, report_dir, evaluation_data):
     metadata = result["evaluation_metadata"]
     evaluation_id = metadata["evaluation_id"]
@@ -232,6 +278,11 @@ def save_evaluation_results(result, report_dir, evaluation_data):
 
     snapshot = {name: value for name, value in evaluation_data.items() if name not in ("seen_test_df", "unseen_test_df")}
     joblib.dump(snapshot, directory / "datasets.joblib", compress=3)
+    stacking_training_data = result.get("stacking_training_data")
+    if stacking_training_data is not None:
+        stacking_predictions = stacking_training_data.copy()
+        stacking_predictions.insert(0, "evaluation_id", evaluation_id)
+        stacking_predictions.to_csv(directory / "stacking_training_predictions.csv", index=False, encoding="utf-8")
 
     return str(directory)
 
@@ -242,74 +293,59 @@ def run_model_evaluation(
     batch_size=None, patience=None, news_start=None, prepare_news=True,
     sector_assignments=None, progress_callback=None, save_model=False,
     model_dir=None, unseen_tickers=None, report_dir=None, train_start=None):
-
     if calibrate and config.task != "classification":
         raise ValueError("Calibration task not supported.")
+    parameters = resolve_training_parameters(
+        config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,
+        batch_size=batch_size, patience=patience)
 
-    parameters = resolve_training_parameters(config, n_estimators=n_estimators, epochs=epochs, learning_rate=learning_rate,batch_size=batch_size, patience=patience)
+    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config,news_start=news_start, prepare_news=prepare_news, sector_assignments=sector_assignments,progress_callback=progress_callback, unseen_tickers=unseen_tickers, train_start=train_start)
 
-    project_dir = Path(__file__).resolve().parents[2]
-    source_files = sorted(project_dir.glob("*.py")) + sorted((project_dir / "services").rglob("*.py"))
-    code_hashes = {path.relative_to(project_dir).as_posix(): sha256(path.read_bytes()).hexdigest() for path in source_files}
+    metadata = build_evaluation_metadata(evaluation_data, config, parameters, validation_start, calibration_start, test_start, test_end,train_start=train_start, calibrate=calibrate)
 
-    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config, news_start=news_start, prepare_news=prepare_news, sector_assignments=sector_assignments, progress_callback=progress_callback, unseen_tickers=unseen_tickers, train_start=train_start)
-
-    result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
-    training_news_end = evaluation_data["news_end"]
-    if training_news_end is not None:
-        training_news_end = min(training_news_end, pd.Timestamp(calibration_start, tz="UTC").isoformat())
-
-    metadata = build_training_metadata(evaluation_data["final_train_df"], evaluation_data["feature_columns"], config, calibration_start,news_start=evaluation_data["news_start"], news_end=training_news_end)
+    result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start,calibrate=calibrate, progress_callback=progress_callback)
     metadata.update(result["training_details"])
-    metadata["code_hashes"] = code_hashes
-
-    metadata["environment"] = {
-        "python": platform.python_version(),
-        "numpy": version("numpy"),
-        "pandas": version("pandas"),
-        "scikit-learn": version("scikit-learn"),
-        "torch": version("torch"),
-        "lightgbm": version("lightgbm"),
-        "joblib": version("joblib")}
-
-    metadata["evaluation_id"] = f"evaluation_{uuid4().hex}"
-    metadata["evaluation_parameters"] = dict(parameters)
-    metadata["evaluation_periods"] = {
-        "train_start": train_start,
-        "validation_start": validation_start,
-        "calibration_start": calibration_start,
-        "test_start": test_start,
-        "test_end": test_end}
-    metadata["evaluation_cohorts"] = {"training_tickers": evaluation_data["training_tickers"], "unseen_tickers": evaluation_data["unseen_tickers"]}
-    metadata["evaluation_news_range"] = {"start": evaluation_data["news_start"], "end": evaluation_data["news_end"]}
-    metadata["calibration_enabled"] = calibrate
-
-    dataset_names = ("selection_train_df", "validation_df", "final_train_df", "calibration_df","seen_test_df", "unseen_test_df", "test_df")
-    metadata["dataset_rows"] = {name: int(len(evaluation_data[name])) for name in dataset_names}
-
     if calibrate:
-        metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config,calibration_start, test_start)
-
+        metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
     if save_model:
         if config.algorithm == "mlp":
             result["metadata"] = save_torch_model(result["model"], result["scaler"], metadata, model_dir)
         else:
             result["metadata"] = save_global_model(result["model"], metadata, model_dir)
-
     result["evaluation_metadata"] = result.get("metadata", metadata)
     if report_dir is not None:
         result["report_dir"] = save_evaluation_results(result, report_dir, evaluation_data)
-
     return result
 
 
 def repeat_model_evaluation(report_dir, progress_callback=None):
     directory = Path(report_dir)
     metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+    method = metadata.get("evaluation_method", "single")
+    if method not in ("single", "blend", "stacking"):
+        raise ValueError("Unsupported evaluation method")
     config = ModelConfig.from_dict(metadata["config"])
-    parameters = resolve_training_parameters(config, **metadata["evaluation_parameters"])
+    if method == "single":
+        parameters = resolve_training_parameters(config, **metadata["evaluation_parameters"])
+    else:
+        if metadata.get("calibration_enabled", False):
+            raise ValueError("Hybrid calibration is not supported")
+        algorithms = metadata["component_algorithms"]
+        options = metadata["evaluation_parameters"]
+
+        if not isinstance(algorithms, list) or any(not isinstance(name, str) for name in algorithms):
+            raise ValueError("Invalid hybrid component order")
+        if not isinstance(options, dict) or len(set(algorithms)) != len(algorithms) or set(algorithms) != set(options):
+            raise ValueError("Hybrid components do not match the saved parameters")
+        stacking_splits = metadata.get("stacking_splits") if method == "stacking" else 5
+        parameters = resolve_hybrid_parameters(config, {name: options[name] for name in algorithms}, method, stacking_splits)
     evaluation_data = joblib.load(directory / "datasets.joblib")
-    result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=metadata["evaluation_periods"]["validation_start"], calibrate=metadata["calibration_enabled"], progress_callback=progress_callback)
+    validation_start = metadata["evaluation_periods"]["validation_start"]
+    if method == "single":
+        result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=metadata["calibration_enabled"], progress_callback=progress_callback)
+    else:
+        result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
+
     result["source_metadata"] = metadata
     return result
 
@@ -364,14 +400,29 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
         "cohort_metrics": group_metrics}
 
 
-def run_hybrid_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, model_parameters, *, train_start=None, news_start=None, prepare_news=True, sector_assignments=None, unseen_tickers=None, progress_callback=None, method="blend", stacking_splits=5):
+def run_hybrid_evaluation(
+    tickers, validation_start, calibration_start, test_start, test_end, config, model_parameters, *,
+    train_start=None, news_start=None, prepare_news=True, sector_assignments=None,
+    unseen_tickers=None, progress_callback=None, method="blend", stacking_splits=5, report_dir=None, save_model=False, model_dir=None):
     parameters = resolve_hybrid_parameters(config, model_parameters, method, stacking_splits)
     evaluation_data = prepare_evaluation_data(
         tickers, validation_start, calibration_start, test_start, test_end, config,
         train_start=train_start, news_start=news_start, prepare_news=prepare_news,
         sector_assignments=sector_assignments, unseen_tickers=unseen_tickers, progress_callback=progress_callback)
 
-    return evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start, progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
+    metadata = build_evaluation_metadata(evaluation_data, config, parameters, validation_start, calibration_start, test_start, test_end,train_start=train_start, method=method, stacking_splits=stacking_splits)
+    result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
+
+    metadata["component_training_details"] = {name: component["training_details"] for name, component in result["model_results"].items()}
+    if method == "stacking":
+        metadata["stacking_training_details"] = deepcopy(result["stacking_training_details"])
+
+    if save_model:
+        result["metadata"] = save_hybrid_model(result, metadata, model_dir)
+    result["evaluation_metadata"] = result.get("metadata", metadata)
+    if report_dir is not None:
+        result["report_dir"] = save_evaluation_results(result, report_dir, evaluation_data)
+    return result
 
 
 if __name__ == "__main__":

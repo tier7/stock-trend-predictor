@@ -12,7 +12,7 @@ from services.news_fetcher import NewsPreparationError
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Uruchom zapisany model RF, LightGBM lub MLP bez ponownego treningu.")
+    parser = argparse.ArgumentParser(description="Uruchom zapisany model RF, LightGBM, MLP lub hybrydę bez ponownego treningu.")
     parser.add_argument("--model-id", required=True, help="Identyfikator wypisany po zapisaniu modelu.")
     parser.add_argument("--ticker", required=True, type=str.upper, help="Spółka, dla której powstanie prognoza.")
     modes = parser.add_mutually_exclusive_group(required=True)

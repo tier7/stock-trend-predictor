@@ -77,6 +77,18 @@ def fit_model(train_df, feature_columns, config, *, validation_df=None, n_estima
 
 
 def predict_model(model, data, feature_columns, config, scaler=None):
+    if isinstance(model, dict) and "model_results" in model:
+        if scaler is not None or model.get("method") not in ("blend", "stacking"):
+            raise ValueError("Invalid hybrid model or shared scaler")
+
+        predictions = {}
+        for algorithm, component in model["model_results"].items():
+            component_config = replace(config, algorithm=algorithm)
+            predictions[algorithm] = predict_model(component["model"], data, feature_columns, component_config, component["scaler"])
+        if model["method"] == "blend":
+            return blend_predictions(predictions.values(), config.task, identity_columns=["date"])
+        return apply_stacking_model(predictions, model["stacking_model"], config, identity_columns=["date"])
+
     if config.algorithm == "mlp":
         if scaler is None:
             raise ValueError("MLP prediction requires a scaler")
@@ -241,7 +253,7 @@ def simulate_model(data, model_id, start_date, end_date, initial_cash, fee_rate,
     result = build_backtest_result(
         results, start_date, end_date, initial_cash, fee_rate, metadata["training_rows"],
         confidence_threshold=confidence_threshold)
-    result["model_type"] = "mlp" if config.algorithm == "mlp" else "global"
+    result["model_type"] = metadata["evaluation_method"] if metadata.get("model_id", "").startswith("hybrid_") else ("mlp" if config.algorithm == "mlp" else "global")
     result["model_metadata"] = metadata
     return result
 
@@ -299,7 +311,7 @@ def resolve_hybrid_parameters(config, model_parameters, method="blend", stacking
     return parameters
 
 
-def prepare_ensemble_features(predictions, task):
+def prepare_ensemble_features(predictions, task, *, identity_columns=None):
     if task not in ("classification", "regression"):
         raise ValueError("Unsupported task")
     predictions = list(predictions)
@@ -308,9 +320,11 @@ def prepare_ensemble_features(predictions, task):
     if any(frame.empty for frame in predictions):
         raise ValueError("Prediction dataframes cannot be empty")
     result = predictions[0].copy()
-    identity_columns = ["ticker", "date", "next_date", "target_end_date"]
-    for column in ("decision_at", "execution_date"):
-        if any(column in frame.columns for frame in predictions):
+    identity_columns = list(["ticker", "date", "next_date", "target_end_date"] if identity_columns is None else identity_columns)
+    if "date" not in identity_columns:
+        raise ValueError("Prediction identity must include date")
+    for column in ("ticker", "next_date", "target_end_date", "decision_at", "execution_date"):
+        if column not in identity_columns and any(column in frame.columns for frame in predictions):
             identity_columns.append(column)
     features = pd.DataFrame(index=result.index)
     prediction_column = "probability_up" if task == "classification" else "predicted_return"
@@ -320,7 +334,7 @@ def prepare_ensemble_features(predictions, task):
             raise ValueError("Missing prediction identity columns")
         if frame[identity_columns].isna().any(axis=None):
             raise ValueError("Prediction identity columns cannot contain empty values")
-        if frame.duplicated(["ticker", "date"]).any():
+        if frame.duplicated(["ticker", "date"] if "ticker" in frame.columns else ["date"]).any():
             raise ValueError("Duplicated predictions for the same ticker and date")
         if not result[identity_columns].equals(frame[identity_columns]):
             raise ValueError("Predictions must describe the same rows in the same order")
@@ -335,8 +349,8 @@ def prepare_ensemble_features(predictions, task):
     return result, features
 
 
-def blend_predictions(predictions, task):
-    result, features = prepare_ensemble_features(predictions, task)
+def blend_predictions(predictions, task, *, identity_columns=None):
+    result, features = prepare_ensemble_features(predictions, task, identity_columns=identity_columns)
     prediction_column = "probability_up" if task == "classification" else "predicted_return"
     result[prediction_column] = 0.0
     for column in features:
@@ -344,4 +358,25 @@ def blend_predictions(predictions, task):
     result[prediction_column] = result[prediction_column] / len(features.columns)
     if task == "classification":
         result["prediction"] = (result["probability_up"] >= 0.5).astype(int)
+    return result
+
+
+def apply_stacking_model(predictions, model, config, *, identity_columns=None):
+    if (config.task == "classification") != hasattr(model, "predict_proba"):
+        raise ValueError("Stacking model task does not match the configuration")
+    algorithms = list(model.feature_names_in_)
+
+    if set(predictions) != set(algorithms):
+        raise ValueError("Stacking requires the same component algorithms used for training")
+
+    result, features = prepare_ensemble_features([predictions[algorithm] for algorithm in algorithms], config.task, identity_columns=identity_columns)
+    features.columns = algorithms
+    if config.task == "classification":
+        if list(model.classes_) != [0, 1]:
+            raise ValueError("Invalid stacking classes")
+        result["probability_up"] = model.predict_proba(features)[:, 1]
+        result["prediction"] = result["probability_up"].ge(0.5).astype(int)
+    else:
+        result["predicted_return"] = model.predict(features)
+
     return result

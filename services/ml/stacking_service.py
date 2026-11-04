@@ -131,24 +131,3 @@ def fit_stacking_model(evaluation_data, config, model_parameters, *, n_splits=5,
         "blocks": block_details}
 
     return model, training_data, details
-
-
-def apply_stacking_model(predictions, model, config):
-    if (config.task == "classification") != hasattr(model, "predict_proba"):
-        raise ValueError("Stacking model task does not match the configuration")
-    algorithms = list(model.feature_names_in_)
-
-    if set(predictions) != set(algorithms):
-        raise ValueError("Stacking requires the same component algorithms used for training")
-
-    result, features = prepare_ensemble_features([predictions[algorithm] for algorithm in algorithms], config.task)
-    features.columns = algorithms
-    if config.task == "classification":
-        if list(model.classes_) != [0, 1]:
-            raise ValueError("Invalid stacking classes")
-        result["probability_up"] = model.predict_proba(features)[:, 1]
-        result["prediction"] = result["probability_up"].ge(0.5).astype(int)
-    else:
-        result["predicted_return"] = model.predict(features)
-
-    return result
