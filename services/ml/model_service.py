@@ -86,7 +86,14 @@ def predict_model(model, data, feature_columns, config, scaler=None):
             component_config = replace(config, algorithm=algorithm)
             predictions[algorithm] = predict_model(component["model"], data, feature_columns, component_config, component["scaler"])
         if model["method"] == "blend":
-            return blend_predictions(predictions.values(), config.task, identity_columns=["date"])
+            weights=None
+            blend_weights=model.get("blend_weights")
+
+            if blend_weights is not None:
+                weights = []
+                for algorithm in predictions:
+                    weights.append(blend_weights[algorithm])
+            return blend_predictions(predictions.values(), config.task, identity_columns=["date"], weights=weights)
         return apply_stacking_model(predictions, model["stacking_model"], config, identity_columns=["date"])
 
     if config.algorithm == "mlp":
@@ -349,13 +356,30 @@ def prepare_ensemble_features(predictions, task, *, identity_columns=None):
     return result, features
 
 
-def blend_predictions(predictions, task, *, identity_columns=None):
+def blend_predictions(predictions, task, *, identity_columns=None, weights=None):
     result, features = prepare_ensemble_features(predictions, task, identity_columns=identity_columns)
+
+    if weights is None:
+        weights = [1] * len(features.columns)
+    else:
+        weights = list(weights)
+
+    if len(weights) != len(features.columns):
+        raise ValueError("Number of weights cannot be different than number of models")
+
+    sum_weights = sum(weights)
+    for weight in weights:
+        if weight < 0 or not isfinite(weight):
+            raise ValueError("Invalid weights")
+
+    if not isfinite(sum_weights) or sum_weights <= 0:
+        raise ValueError("Invalid weights")
+
     prediction_column = "probability_up" if task == "classification" else "predicted_return"
     result[prediction_column] = 0.0
     for column in features:
-        result[prediction_column] += features[column]
-    result[prediction_column] = result[prediction_column] / len(features.columns)
+        result[prediction_column] += features[column] * weights[column]
+    result[prediction_column] = result[prediction_column] / sum_weights
     if task == "classification":
         result["prediction"] = (result["probability_up"] >= 0.5).astype(int)
     return result

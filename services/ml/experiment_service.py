@@ -11,7 +11,7 @@ from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, 
 from services.ml.model_service import resolve_hybrid_parameters, apply_stacking_model
 from services.ml.stacking_service import fit_stacking_model
 from services.ml.evaluation_service import evaluate, predict_baseline
-from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator
+from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator, restore_calibrator
 from uuid import uuid4
 import json
 from pathlib import Path
@@ -325,11 +325,12 @@ def repeat_model_evaluation(report_dir, progress_callback=None):
     if method not in ("single", "blend", "stacking"):
         raise ValueError("Unsupported evaluation method")
     config = ModelConfig.from_dict(metadata["config"])
+    calibrate = metadata.get("calibration_enabled", False)
+    if calibrate:
+        restore_calibrator(metadata.get("calibration"), config)
     if method == "single":
         parameters = resolve_training_parameters(config, **metadata["evaluation_parameters"])
     else:
-        if metadata.get("calibration_enabled", False):
-            raise ValueError("Hybrid calibration is not supported")
         algorithms = metadata["component_algorithms"]
         options = metadata["evaluation_parameters"]
 
@@ -342,17 +343,37 @@ def repeat_model_evaluation(report_dir, progress_callback=None):
     evaluation_data = joblib.load(directory / "datasets.joblib")
     validation_start = metadata["evaluation_periods"]["validation_start"]
     if method == "single":
-        result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=metadata["calibration_enabled"], progress_callback=progress_callback)
+        result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
     else:
-        result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
+        result = evaluate_hybrid_model(
+            evaluation_data, config, parameters, validation_start=validation_start,
+            progress_callback=progress_callback, method=method, stacking_splits=stacking_splits,
+            blend_weights=metadata.get("blend_weights"), calibrate=calibrate)
 
     result["source_metadata"] = metadata
     return result
 
 
-def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validation_start=None, progress_callback=None, method="blend", stacking_splits=5):
+def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validation_start=None, progress_callback=None, method="blend", stacking_splits=5, blend_weights=None, calibrate=False):
+
+    if calibrate and config.task != "classification":
+        raise ValueError("Calibration requires classification")
 
     parameters = resolve_hybrid_parameters(config, model_parameters, method, stacking_splits)
+
+
+    if blend_weights is not None:
+        if method != "blend":
+            raise ValueError("Blend weights require method blend")
+        if not isinstance(blend_weights, dict) or set(blend_weights) != set(parameters):
+            raise ValueError("Weights must match selected algorithms")
+
+        blend_weights = blend_weights.copy()
+
+    elif method == "blend":
+        blend_weights = {algorithm:1 for algorithm in parameters}
+
+
     stacking_model = None
     stacking_training_data = None
     stacking_training_details = {}
@@ -368,12 +389,26 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
     metrics = {name: result["metrics"]["model"] for name, result in model_results.items()}
 
     if method == "blend":
-        combined = blend_predictions(predictions.values(), config.task)
+        weights = []
+        for algorithm in predictions:
+            weights.append(blend_weights[algorithm])
+        combined = blend_predictions(predictions.values(), config.task, weights=weights)
     else:
         combined = apply_stacking_model(predictions, stacking_model, config)
 
+
+    calibrator = None
+    if calibrate:
+        hybrid_model = {"method": method,"model_results": model_results,"stacking_model": stacking_model,"blend_weights": blend_weights}
+        calibration_predictions = predict_model(hybrid_model, evaluation_data["calibration_df"], evaluation_data["feature_columns"], config)
+        calibrator = fit_calibrator(calibration_predictions, config)
+
     predictions[method] = combined
     metrics[method] = evaluate(combined, config)
+    if calibrate:
+        calibrated_name = f"calibrated_{method}"
+        predictions[calibrated_name] = apply_calibrator(combined, calibrator, config)
+        metrics[calibrated_name] = evaluate(predictions[calibrated_name], config)
 
     first_result = next(iter(model_results.values()))
     predictions["baseline"] = first_result["predictions"]["baseline"]
@@ -388,7 +423,10 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
                 group_metrics[group_name][algorithm] = result["cohort_metrics"][group_name]["model"]
             group_metrics[group_name]["baseline"] = first_result["cohort_metrics"][group_name]["baseline"]
             group_metrics[group_name][method] = evaluate(frame, config)
-
+            if calibrate:
+                group_mask = seen_mask if group_name == "seen" else ~seen_mask
+                calibrated_frame = predictions[calibrated_name].loc[group_mask]
+                group_metrics[group_name][calibrated_name] = evaluate(calibrated_frame, config)
     return {
         "method": method,
         "model_results": model_results,
@@ -397,33 +435,38 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
         "stacking_training_details": stacking_training_details,
         "predictions": predictions,
         "metrics": metrics,
-        "cohort_metrics": group_metrics}
+        "cohort_metrics": group_metrics,
+        "blend_weights": blend_weights,
+        "calibrator": calibrator
+    }
 
 
-def run_hybrid_evaluation(
-    tickers, validation_start, calibration_start, test_start, test_end, config, model_parameters, *,
-    train_start=None, news_start=None, prepare_news=True, sector_assignments=None,
-    unseen_tickers=None, progress_callback=None, method="blend", stacking_splits=5, report_dir=None, save_model=False, model_dir=None):
+def run_hybrid_evaluation(tickers, validation_start, calibration_start, test_start, test_end, config, model_parameters, *, train_start=None, news_start=None, prepare_news=True, sector_assignments=None,
+    unseen_tickers=None, progress_callback=None, method="blend", stacking_splits=5, report_dir=None, save_model=False, model_dir=None, blend_weights=None, calibrate=False):
+
+    if calibrate and config.task != "classification":
+        raise ValueError("Calibration requires classification")
+
     parameters = resolve_hybrid_parameters(config, model_parameters, method, stacking_splits)
-    evaluation_data = prepare_evaluation_data(
-        tickers, validation_start, calibration_start, test_start, test_end, config,
-        train_start=train_start, news_start=news_start, prepare_news=prepare_news,
-        sector_assignments=sector_assignments, unseen_tickers=unseen_tickers, progress_callback=progress_callback)
+    evaluation_data = prepare_evaluation_data(tickers, validation_start, calibration_start, test_start, test_end, config,train_start=train_start, news_start=news_start, prepare_news=prepare_news,sector_assignments=sector_assignments, unseen_tickers=unseen_tickers, progress_callback=progress_callback)
 
-    metadata = build_evaluation_metadata(evaluation_data, config, parameters, validation_start, calibration_start, test_start, test_end,train_start=train_start, method=method, stacking_splits=stacking_splits)
-    result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits)
+    metadata = build_evaluation_metadata(evaluation_data, config, parameters, validation_start, calibration_start, test_start, test_end,train_start=train_start, calibrate=calibrate, method=method, stacking_splits=stacking_splits)
+    result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits,blend_weights=blend_weights, calibrate=calibrate)
 
     metadata["component_training_details"] = {name: component["training_details"] for name, component in result["model_results"].items()}
     if method == "stacking":
         metadata["stacking_training_details"] = deepcopy(result["stacking_training_details"])
-
+    if method == "blend":
+        metadata["blend_weights"] = result["blend_weights"].copy()
+    if calibrate:
+        metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
     if save_model:
         result["metadata"] = save_hybrid_model(result, metadata, model_dir)
+
     result["evaluation_metadata"] = result.get("metadata", metadata)
     if report_dir is not None:
         result["report_dir"] = save_evaluation_results(result, report_dir, evaluation_data)
     return result
-
 
 if __name__ == "__main__":
     seen_test_df, unseen_test_df = run_experiment("2025-01-01", "2025-12-31")

@@ -17,6 +17,7 @@ from dataclasses import replace
 from services.ml.market_feature_service import MARKET_FEATURE_POLICY
 from services.ml.sector_feature_service import (SECTOR_FEATURE_POLICY, SECTOR_BENCHMARKS, extract_sector_benchmarks)
 from services.ml.calibration_service import restore_calibrator
+from math import isfinite
 
 GLOBAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "global_forest"
 MODEL_FORMAT_VERSION = 1
@@ -365,7 +366,7 @@ def validate_hybrid_metadata(metadata, stacking_model=None):
     model_id = metadata.get("model_id")
     match = HYBRID_MODEL_ID_PATTERN.fullmatch(model_id) if isinstance(model_id, str) else None
 
-    if match is None or metadata.get("format_version") != MODEL_FORMAT_VERSION:
+    if match is None or metadata.get("format_version") not in (MODEL_FORMAT_VERSION, CALIBRATED_MODEL_FORMAT_VERSION):
         raise ValueError("Unsupported hybrid model format or ID")
     method = metadata.get("evaluation_method")
 
@@ -373,8 +374,10 @@ def validate_hybrid_metadata(metadata, stacking_model=None):
         raise ValueError("Hybrid ID does not match its method or training cutoff")
     config = get_model_config(metadata)
 
-    if config.scope != "global" or "calibration" in metadata or metadata.get("calibration_enabled", False):
-        raise ValueError("Expected an uncalibrated global hybrid")
+    if config.scope != "global":
+        raise ValueError("Expected a global hybrid")
+    if metadata.get("calibration_enabled", "calibration" in metadata) != ("calibration" in metadata):
+        raise ValueError("Hybrid calibration flag does not match its metadata")
     validate_feature_policies(metadata, config)
 
     if metadata.get("feature_columns") != get_feature_columns(config.feature_groups):
@@ -394,6 +397,19 @@ def validate_hybrid_metadata(metadata, stacking_model=None):
         raise ValueError("Invalid hybrid component details or parameters")
 
     prefixes = {"random_forest": "global_forest_", "mlp": "mlp_", "lightgbm": "global_lightgbm_"}
+
+    blend_weights = metadata.get("blend_weights")
+    if blend_weights is not None:
+        if method != "blend":
+            raise ValueError("Blend weights require method blend")
+        if not isinstance(blend_weights, dict) or set(blend_weights) != set(algorithms):
+            raise ValueError("Weights must match selected algorithms")
+        for weight in blend_weights.values():
+            if not isinstance(weight, (int, float)) or not isfinite(weight) or weight < 0:
+                raise ValueError("Invalid weights")
+        sum_weights = sum(blend_weights.values())
+        if not isfinite(sum_weights) or sum_weights <= 0:
+            raise ValueError("Invalid weights")
 
     for name in algorithms:
         component_id = validate_model_id(metadata["component_model_ids"][name])
@@ -422,21 +438,27 @@ def save_hybrid_model(result, metadata, model_dir=None):
     if not isinstance(algorithms, list) or len(algorithms) < 2 or not isinstance(components, dict) or algorithms != list(components):
         raise ValueError("Hybrid results do not match the component order")
     config = get_model_config(metadata)
-    if config.scope != "global" or "calibration" in metadata or metadata.get("calibration_enabled", False):
-        raise ValueError("Expected an uncalibrated global hybrid")
+    if config.scope != "global":
+        raise ValueError("Expected a global hybrid")
+    if metadata.get("calibration_enabled", "calibration" in metadata) != ("calibration" in metadata):
+        raise ValueError("Hybrid calibration flag does not match its metadata")
     if any(component.get("calibrator") is not None for component in components.values()):
         raise ValueError("Calibrated components are not supported in this hybrid")
     metadata["model_id"] = f"hybrid_{method}_{metadata['training_cutoff']}_{uuid4().hex[:8]}"
     validate_model_id(metadata["model_id"])
-    metadata["format_version"] = MODEL_FORMAT_VERSION
+    metadata["format_version"] = CALIBRATED_MODEL_FORMAT_VERSION if "calibration" in metadata else MODEL_FORMAT_VERSION
+    if "calibration" in metadata:
+        metadata["calibration"]["model_id"] = metadata["model_id"]
+    validate_feature_policies(metadata, config)
     metadata["component_model_ids"] = {}
     directory = Path(model_dir or HYBRID_MODEL_DIR) / metadata["model_id"]
     directory.mkdir(parents=True, exist_ok=False)
     for algorithm in algorithms:
         component = components[algorithm]
-        component_metadata = {name: deepcopy(value) for name, value in metadata.items() if not name.startswith(("component_", "stacking_")) and name != "model_id"}
+        component_metadata = {name: deepcopy(value) for name, value in metadata.items() if not name.startswith(("component_", "stacking_")) and name not in ("model_id", "calibration", "calibration_enabled", "blend_weights")}
         component_metadata["config"] = replace(config, algorithm=algorithm).to_dict()
         component_metadata["evaluation_method"] = "single"
+        component_metadata["calibration_enabled"] = False
         component_metadata["evaluation_parameters"] = deepcopy(metadata["evaluation_parameters"][algorithm])
         component_metadata.update(component["training_details"])
         if algorithm == "mlp":
@@ -472,7 +494,7 @@ def load_hybrid_model(model_id, model_dir=None):
     for algorithm in metadata["component_algorithms"]:
         component_model, scaler, component_metadata = load_model(metadata["component_model_ids"][algorithm], directory / "components")
         expected_config = replace(config, algorithm=algorithm)
-        if get_model_config(component_metadata) != expected_config or "calibration" in component_metadata:
+        if get_model_config(component_metadata) != expected_config or "calibration" in component_metadata or component_metadata.get("calibration_enabled", False):
             raise ValueError("Component configuration does not match the hybrid")
         if any(component_metadata.get(name) != metadata.get(name) for name in shared_fields):
             raise ValueError("Component data or feature policy does not match the hybrid")
@@ -481,5 +503,5 @@ def load_hybrid_model(model_id, model_dir=None):
             "scaler": scaler,
             "metadata": component_metadata,
             "training_details": deepcopy(metadata["component_training_details"][algorithm])}
-    model = {"method": metadata["evaluation_method"], "model_results": components, "stacking_model": stacking_model}
+    model = {"method": metadata["evaluation_method"], "model_results": components, "stacking_model": stacking_model, "blend_weights": deepcopy(metadata.get("blend_weights"))}
     return model, None, metadata
