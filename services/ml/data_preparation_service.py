@@ -117,11 +117,13 @@ def load_news_features(ticker, start_date, end_date, *, prepare_news=True, refre
     return build_preopen_news_features(news, schedule, range_start, range_end, minutes_before_open=minutes_before_open, history_start=history_start)
 
 
-def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None, prepare_news=True, sector_assignments=None):
+def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=None, feature_groups=("technical",), news_start=None, news_end=None, prepare_news=True, sector_assignments=None, stock_data=None):
 
     tickers = list(tickers)
     if not tickers:
         raise ValueError("Tickers cannot be empty")
+    if stock_data is not None and not isinstance(stock_data, dict):
+        raise ValueError("stock_data must map tickers to price dataframes")
 
     snapshot_at = pd.Timestamp.now(tz="UTC")
     uses_news = "news" in feature_groups
@@ -132,9 +134,14 @@ def connect_data(tickers, progress_callback=None, *, horizon=1, feature_columns=
 
     datasets = []
     for ticker in tickers:
-        if not ensure_stock_data(ticker, "1d"):
-            raise ValueError(f"No data for ticker {ticker}.")
-        data = get_stock_data(ticker, years=None)
+        if stock_data is not None and ticker in stock_data:
+            data = stock_data[ticker]
+        else:
+            if not ensure_stock_data(ticker, "1d"):
+                raise ValueError(f"No data for ticker {ticker}.")
+            data = get_stock_data(ticker, years=None)
+        if not isinstance(data, pd.DataFrame):
+            raise ValueError(f"Price data for {ticker} must be a dataframe")
         if data.empty:
             raise ValueError(f"No data for {ticker} in database.")
 
