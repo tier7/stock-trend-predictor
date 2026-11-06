@@ -6,7 +6,7 @@ from services.data_updater import ensure_stock_data
 from services.resample_service import resample_data
 from services.company_service import ensure_stock_name
 from services.technical_indicator_service import get_latest_indicators, calculate_all_indicators
-from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold
+from services.strategy_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, StrategyConfig
 from services.ml.global_training_service import GlobalTrainingJobs
 from services.ml.model_store_service import GLOBAL_MODEL_DIR, get_active_global_model, list_global_models
 import re
@@ -222,7 +222,6 @@ def stock_prediction_api(ticker):
     end_date = request.args.get("end_date")
     initial_cash_value = request.args.get("initial_cash")
     fee_rate_value = request.args.get("fee_rate")
-
     if not start_date or not end_date:
         return jsonify({"error": "Missing start or end date"}), 400
 
@@ -237,21 +236,16 @@ def stock_prediction_api(ticker):
             0.001,
             "Fee rate"
         )
-        confidence_threshold = validate_confidence_threshold(
-            request.args.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
-        )
+
+        confidence_threshold = validate_confidence_threshold(request.args.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD))
+        strategy_config = StrategyConfig(confidence_threshold=confidence_threshold, fee_rate=fee_rate)
+
     except ValueError as error:
         return jsonify({
             "error": str(error)}), 400
 
-    if not start_date or not end_date:
-        return jsonify({"error": "Missing start or end date"}), 400
-
-    if initial_cash <= 0:
-        return jsonify({"error": "Initial cash must be greater than zero."}), 400
-
-    if fee_rate < 0:
-        return jsonify({"error": "Fee rate cannot be negative."}), 400
+    if not isfinite(initial_cash) or initial_cash <= 0:
+        return jsonify({"error": "Initial cash must be finite and greater than zero."}), 400
 
     success = ensure_stock_data(ticker, "1d")
     if not success:
@@ -262,10 +256,7 @@ def stock_prediction_api(ticker):
         return jsonify({"error": f"No data found for ticker {ticker}"}), 404
 
     try:
-        predictions = train_and_predict(
-            df, start_date, end_date, initial_cash, fee_rate,
-            confidence_threshold=confidence_threshold,
-        )
+        predictions = train_and_predict(df,start_date,end_date,initial_cash=initial_cash,strategy_config=strategy_config)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -319,9 +310,8 @@ def global_simulation_api(ticker):
     try:
         initial_cash = parse_float_parameter(payload.get("initial_cash"), 10000, "Kapitał")
         fee_rate = parse_float_parameter(payload.get("fee_rate"), 0.001, "Prowizja")
-        confidence_threshold = validate_confidence_threshold(
-            payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
-        )
+        confidence_threshold = validate_confidence_threshold(payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD))
+        strategy_config = StrategyConfig(confidence_threshold=confidence_threshold,fee_rate=fee_rate)
         if not isfinite(initial_cash) or initial_cash <= 0:
             raise ValueError("Kapitał musi być skończoną liczbą większą od zera.")
         if not isfinite(fee_rate) or fee_rate < 0:
@@ -333,9 +323,8 @@ def global_simulation_api(ticker):
             return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
         result = simulate_model(
             data, payload.get("model_id"), payload.get("start_date"), payload.get("end_date"),
-            initial_cash, fee_rate, app.config["GLOBAL_MODEL_DIR"],
-            confidence_threshold=confidence_threshold, ticker=ticker
-        )
+            initial_cash=initial_cash, model_dir=app.config["GLOBAL_MODEL_DIR"],
+            strategy_config=strategy_config, ticker=ticker)
     except FileNotFoundError as error:
         return jsonify({"error": str(error)}), 404
 
@@ -361,11 +350,10 @@ def global_walk_forward_api(ticker):
         start_date = payload.get("start_date")
         end_date = payload.get("end_date")
         validate_simulation_dates(start_date, end_date)
-        confidence_threshold = validate_confidence_threshold(
-            payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
-        )
+        confidence_threshold = validate_confidence_threshold(payload.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),)
         initial_cash = parse_float_parameter(payload.get("initial_cash"), 10000, "Kapitał")
         fee_rate = parse_float_parameter(payload.get("fee_rate"), 0.001, "Prowizja")
+        strategy_config = StrategyConfig(confidence_threshold=confidence_threshold,fee_rate=fee_rate)
         if not isfinite(initial_cash) or initial_cash <= 0:
             raise ValueError("Kapitał musi być skończoną liczbą większą od zera.")
         if not isfinite(fee_rate) or fee_rate < 0:
@@ -375,10 +363,8 @@ def global_walk_forward_api(ticker):
         data = get_stock_data(ticker, "1d", None)
         if data.empty:
             return jsonify({"error": f"Brak danych spółki {ticker} w bazie."}), 404
-        result = simulate_global_walk_forward(
-            data, ticker, start_date, end_date, initial_cash, fee_rate,
-            confidence_threshold=confidence_threshold,
-        )
+        result = simulate_global_walk_forward(data,ticker,start_date,end_date,initial_cash=initial_cash,strategy_config=strategy_config)
+
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify(result)

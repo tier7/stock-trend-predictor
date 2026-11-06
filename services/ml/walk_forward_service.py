@@ -4,7 +4,8 @@ from services.ml.data_preparation_service import connect_data, select_training_r
 from services.ml.dataset_service import FEATURE_COLUMNS, prepare_dataset
 from services.ml.model_config import ModelConfig
 from services.ml.model_service import DEFAULT_TRAINING_TICKERS, fit_model, predict_model
-from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, build_backtest_result
+from services.simulator_service import build_backtest_result
+from services.strategy_service import StrategyConfig
 
 RETRAIN_INTERVAL = 20
 
@@ -57,10 +58,13 @@ def run_walk_forward(train_df, test_df, feature_columns, config, *, date_blocks=
     return results.sort_values(sort_columns), training_blocks
 
 
-def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_blocks=None, *, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
-    confidence_threshold = validate_confidence_threshold(confidence_threshold)
-    if start_date >= end_date:
-        raise ValueError("End date must be later than start date.")
+def train_and_predict(data, start_date, end_date, initial_cash=10000, *, strategy_config=None, date_blocks=None):
+    if strategy_config is None:
+        strategy_config = StrategyConfig()
+    if not isinstance(strategy_config, StrategyConfig):
+        raise ValueError("Expected StrategyConfig")
+
+    validate_simulation_dates(start_date, end_date)
     prepared = prepare_dataset(data)
     train_period_df, test_df = split_dataset_by_date(prepared, start_date, end_date)
     if len(train_period_df) < 100:
@@ -71,13 +75,16 @@ def train_and_predict(data, start_date, end_date, initial_cash, fee_rate, date_b
     results, _ = run_walk_forward(
         prepared, test_df, FEATURE_COLUMNS, config,
         date_blocks=date_blocks, retrain_interval=RETRAIN_INTERVAL)
-    return build_backtest_result(
-        results, start_date, end_date, initial_cash, fee_rate, len(train_period_df),
-        confidence_threshold=confidence_threshold)
+    return build_backtest_result(results, data, config, strategy_config, start_date, end_date, initial_cash, len(train_period_df))
 
 
-def simulate_global_walk_forward(data, ticker, start_date, end_date, initial_cash, fee_rate, *,confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
-    confidence_threshold = validate_confidence_threshold(confidence_threshold)
+
+def simulate_global_walk_forward(data, ticker, start_date, end_date, initial_cash=10000, *, strategy_config=None):
+    if strategy_config is None:
+        strategy_config = StrategyConfig()
+    if not isinstance(strategy_config, StrategyConfig):
+        raise ValueError("Expected StrategyConfig")
+
     validate_simulation_dates(start_date, end_date)
     ticker = ticker.upper()
     prepared = prepare_dataset(data)
@@ -89,7 +96,7 @@ def simulate_global_walk_forward(data, ticker, start_date, end_date, initial_cas
     train_df = connect_data(train_tickers)
     config = ModelConfig(algorithm="random_forest", task="classification")
     results, training_blocks = run_walk_forward(train_df, test_df, FEATURE_COLUMNS, config, retrain_interval=RETRAIN_INTERVAL)
-    result = build_backtest_result(results, start_date, end_date, initial_cash, fee_rate, training_blocks[0]["training_rows"],confidence_threshold=confidence_threshold)
+    result = build_backtest_result(results, data, config, strategy_config, start_date, end_date,  initial_cash, training_blocks[0]["training_rows"])
     result.update({
         "model_type": "global_walk_forward",
         "retrain_interval": RETRAIN_INTERVAL,

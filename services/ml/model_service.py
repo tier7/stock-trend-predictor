@@ -11,7 +11,8 @@ from services.ml.data_preparation_service import prepare_training_data, prepare_
 from services.ml.tree_model_service import fit as fit_tree, predict as predict_tree
 from services.ml.mlp_service import fit as fit_mlp, predict as predict_mlp
 from services.ml.model_store_service import (build_training_metadata, save_global_model, save_torch_model, load_model, get_model_config)
-from services.simulator_service import DEFAULT_CONFIDENCE_THRESHOLD, validate_confidence_threshold, build_backtest_result
+from services.simulator_service import build_backtest_result
+from services.strategy_service import StrategyConfig
 from services.ml.evaluation_service import evaluate, calculate_baseline_loss
 from services.ml.calibration_service import apply_saved_calibration
 
@@ -244,25 +245,35 @@ def predict_history(data, model_id, start_date, end_date, model_dir=None, *, tic
     return results, metadata
 
 
-def simulate_model(data, model_id, start_date, end_date, initial_cash, fee_rate, model_dir=None, *,ticker=None, prepare_news=True, progress_callback=None, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, sector_assignments=None):
-    confidence_threshold = validate_confidence_threshold(confidence_threshold)
+def simulate_model(data, model_id, start_date, end_date, initial_cash=10000, *,strategy_config=None, model_dir=None, ticker=None,prepare_news=True, progress_callback=None, sector_assignments=None):
     validate_simulation_dates(start_date, end_date)
     if data.empty:
         raise ValueError("Empty stock data")
+    if strategy_config is None:
+        strategy_config = StrategyConfig()
+    if not isinstance(strategy_config, StrategyConfig):
+        raise ValueError("Expected StrategyConfig")
+    initial_cash = float(initial_cash)
+    if not isfinite(initial_cash) or initial_cash <= 0:
+        raise ValueError("Initial cash must be finite and positive")
+
     model, scaler, metadata = load_model(model_id, model_dir)
-    config = get_model_config(metadata)
-    if config.task != "classification" or config.horizon != 1:
-        raise ValueError("Obecny symulator obsługuje klasyfikację z horyzontem 1 sesji.")
-    results = _predict_with_loaded_model(
-        data, model, scaler, metadata, config, start_date, end_date,
-        ticker=ticker, prepare_news=prepare_news, progress_callback=progress_callback,
-        sector_assignments=sector_assignments)
-    result = build_backtest_result(
-        results, start_date, end_date, initial_cash, fee_rate, metadata["training_rows"],
-        confidence_threshold=confidence_threshold)
-    result["model_type"] = metadata["evaluation_method"] if metadata.get("model_id", "").startswith("hybrid_") else ("mlp" if config.algorithm == "mlp" else "global")
+    model_config = get_model_config(metadata)
+
+    results = _predict_with_loaded_model(data, model, scaler, metadata, model_config,
+    start_date, end_date, ticker=ticker, prepare_news=prepare_news, progress_callback=progress_callback, sector_assignments=sector_assignments)
+
+    result = build_backtest_result(results, data, model_config, strategy_config, start_date, end_date, initial_cash, metadata["training_rows"])
+
+    if metadata.get("model_id", "").startswith("hybrid_"):
+        result["model_type"] = metadata["evaluation_method"]
+    else:
+        result["model_type"] = model_config.algorithm
+
     result["model_metadata"] = metadata
+
     return result
+
 
 
 def predict_latest(data, model_id, model_dir=None, *, ticker=None, as_of=None,prepare_news=True, progress_callback=None, sector_assignments=None):

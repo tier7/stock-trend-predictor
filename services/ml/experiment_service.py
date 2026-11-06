@@ -1,5 +1,6 @@
 
 from services.db import get_stock_data
+from services.strategy_service import DEFAULT_CONFIDENCE_THRESHOLD, StrategyConfig
 from services.ml.walk_forward_service import RETRAIN_INTERVAL, run_walk_forward, train_and_predict
 from services.ml.data_preparation_service import connect_data, split_dataset_by_date, validate_simulation_dates, prepare_evaluation_data
 from services.ml.dataset_service import FEATURE_COLUMNS
@@ -29,8 +30,12 @@ def build_result_row(ticker, model_type, result):
         "start_date": result["effective_test_start_date"],
         "end_date": result["effective_test_end_date"],
         "confidence_threshold": result["model_summary"]["confidence_threshold"],
-        "accuracy": result["accuracy"],
-        "baseline_accuracy": result["baseline_accuracy"],
+        "accuracy": result.get("accuracy"),
+        "baseline_accuracy": result.get("baseline_accuracy"),
+        "task": result["task"],
+        "horizon": result["horizon"],
+        "mae": result.get("mae"),
+        "rmse": result.get("rmse"),
         "model_return": result["model_summary"]["total_return"],
         "model_drawdown": result["model_summary"]["max_drawdown"],
         "buy_hold_return": result["buyandhold_summary"]["total_return"],
@@ -39,7 +44,8 @@ def build_result_row(ticker, model_type, result):
         "model_exposure": result["model_summary"]["market_exposure"],
         "transactions": result["model_summary"]["total_transactions"]}
 
-def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=0.6, *, torch_model_id=None):
+def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, *, torch_model_id=None):
+    strategy_config = StrategyConfig(confidence_threshold=confidence_threshold, fee_rate=fee_rate)
     data = get_stock_data(ticker,years=None)
     if data.empty:
         raise ValueError("No data")
@@ -53,15 +59,10 @@ def run_simulation(ticker, model_type, start_date, end_date, global_model_id=Non
             if torch_model_id is None:
                 raise ValueError("torch_model_id is required for MLP")
             model_id = torch_model_id
-        result = simulate_model(
-            data, model_id, start_date, end_date, initial_cash, fee_rate,
-            confidence_threshold=confidence_threshold, ticker=ticker
-        )
+
+        result = simulate_model(data,model_id,start_date,end_date,initial_cash=initial_cash,strategy_config=strategy_config,ticker=ticker)
     elif model_type == "local":
-        result = train_and_predict(
-            data, start_date, end_date, initial_cash, fee_rate,
-            confidence_threshold=confidence_threshold
-        )
+        result = train_and_predict(data, start_date, end_date, initial_cash=initial_cash, strategy_config=strategy_config)
     else:
         raise ValueError("model_type must be either 'global', 'local' or 'mlp'")
 
@@ -71,7 +72,7 @@ def run_simulation(ticker, model_type, start_date, end_date, global_model_id=Non
     row["fee_rate"] = fee_rate
     return row
 
-def run_experiments(tickers,model_types,periods,global_model_id=None,initial_cash=10000,fee_rate=0.001,confidence_threshold=0.6,*,torch_model_id=None,):
+def run_experiments(tickers,model_types,periods,global_model_id=None,initial_cash=10000,fee_rate=0.001,confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD,*,torch_model_id=None):
     rows = []
     if "global" in model_types and global_model_id is None:
         metadata = get_active_global_model()
