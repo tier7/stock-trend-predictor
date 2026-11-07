@@ -228,6 +228,10 @@ def _predict_with_loaded_model(data, model, scaler, metadata, config, start_date
     results = apply_saved_calibration(results, metadata, config)
     if config.task == "classification":
         results["baseline_prediction"] = metadata["baseline_prediction"]
+        if "baseline_probability_up" in metadata:
+            results["baseline_probability_up"] = metadata["baseline_probability_up"]
+    elif "baseline_return" in metadata:
+        results["baseline_predicted_return"] = metadata["baseline_return"]
     return results
 
 

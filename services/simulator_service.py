@@ -3,9 +3,16 @@ from datetime import date
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score
-from services.ml.evaluation_service import evaluate
+from services.ml.evaluation_service import CORRELATION_POLICY, evaluate
+from services.ml.baseline_service import get_feature_baseline_spec
 from services.strategy_service import should_enter_position
 from dataclasses import asdict, replace
+
+SHARPE_POLICY = {
+    "sessions_per_year": 252,
+    "annual_risk_free_rate": 0.0,
+    "std_ddof": 1
+}
 
 def calculate_max_drawdown(equity_history, initial_cash):
     max_wallet_value = initial_cash
@@ -18,6 +25,38 @@ def calculate_max_drawdown(equity_history, initial_cash):
         if drawdown > max_drawdown:
             max_drawdown = drawdown
     return max_drawdown
+
+def calculate_sharpe(equity_history, initial_cash, *, annual_risk_free_rate=SHARPE_POLICY["annual_risk_free_rate"], sessions_per_year=SHARPE_POLICY["sessions_per_year"]):
+    initial_cash = float(initial_cash)
+    annual_risk_free_rate = float(annual_risk_free_rate)
+
+    if not np.isfinite(initial_cash) or initial_cash <= 0:
+        raise ValueError("Initial cash must be finite and positive")
+    if type(sessions_per_year) is not int or sessions_per_year < 1:
+        raise ValueError("Sessions per year must be integer and positive")
+    if (not np.isfinite(annual_risk_free_rate) or annual_risk_free_rate <= -1):
+        raise ValueError("Annual risk free rate must be finite and above -1")
+
+    values = pd.Series([row["value"] for row in equity_history], dtype=float)
+
+    if not np.isfinite(values.to_numpy()).all() or (values <= 0).any():
+        raise ValueError("Portfolio values must be finite and positive")
+    if len(values) < 2:
+        return None
+
+    previous_values = values.shift(1).fillna(initial_cash)
+    daily_returns = values / previous_values - 1
+
+    daily_risk_free_rate = ((1 + annual_risk_free_rate) ** (1 / sessions_per_year) - 1)
+    excess_returns = daily_returns - daily_risk_free_rate
+
+    volatility = excess_returns.std(ddof=SHARPE_POLICY["std_ddof"])
+
+    if not np.isfinite(volatility) or np.isclose(volatility, 0.0, atol=1e-12):
+        return None
+
+    sharpe = (np.sqrt(sessions_per_year)* excess_returns.mean()/ volatility)
+    return float(sharpe) if np.isfinite(sharpe) else None
 
 def calculate_cagr(equity_history, initial_value, final_value):
     start_date = date.fromisoformat(equity_history[0]["date"])
@@ -277,7 +316,8 @@ def run_backtest(predictions_df, prices_df, model_config, strategy_config, initi
         "closed_trades": closed_trades,
         "profitable_trades": profitable,
         "losing_trades": losing,
-        "win_rate": win_rate
+        "win_rate": win_rate,
+        "sharpe": calculate_sharpe(equity_history, initial_cash)
     }
 
 def run_buy_and_hold(prices, strategy_config, initial_cash=10000):
@@ -336,8 +376,8 @@ def run_buy_and_hold(prices, strategy_config, initial_cash=10000):
         "equity_history": equity_history,
         "max_drawdown": calculate_max_drawdown(equity_history, initial_cash),
         "market_exposure": 1.0,
-        "cagr": calculate_cagr(equity_history, initial_cash, final_value)
-    }
+        "cagr": calculate_cagr(equity_history, initial_cash, final_value),
+        "sharpe": calculate_sharpe(equity_history, initial_cash)}
 
 
 def build_backtest_result(results_df, prices_df, model_config, strategy_config, start_date, end_date, initial_cash, training_rows):
@@ -352,7 +392,7 @@ def build_backtest_result(results_df, prices_df, model_config, strategy_config, 
     model_summary = run_backtest(result_df, prices_df, model_config, strategy_config, initial_cash)
     buy_hold_summary = run_buy_and_hold(prices, strategy_config, initial_cash)
     metrics = {
-        name: value if isinstance(value, dict) else float(value)
+        name: value if value is None or isinstance(value, dict) else float(value)
         for name, value in model_evaluation.items()
         if name not in ("predictions", "probability_up")}
 
@@ -366,6 +406,11 @@ def build_backtest_result(results_df, prices_df, model_config, strategy_config, 
         "target", "target_return",
         "prediction", "probability_up", "predicted_return", "is_correct"]
 
+    for prefix in ("baseline", "linear_baseline"):
+        for column in ("prediction", "probability_up", "predicted_return"):
+            reported_columns.append(f"{prefix}_{column}")
+
+    reported_columns.append("walk_forward_block")
     records_df = result_df[[column for column in reported_columns if column in result_df.columns]].copy()
 
     for column in ("date", "next_date", "target_end_date"):
@@ -374,6 +419,7 @@ def build_backtest_result(results_df, prices_df, model_config, strategy_config, 
     result = {
         "task": model_config.task,
         "horizon": model_config.horizon,
+        "model_config": model_config.to_dict(),
         "requested_start_date": start_date,
         "requested_end_date": end_date,
         "effective_test_start_date": prices.index[0].date().isoformat(),
@@ -385,7 +431,24 @@ def build_backtest_result(results_df, prices_df, model_config, strategy_config, 
         "buyandhold_summary": buy_hold_summary}
 
     result.update(metrics)
+    result["metric_policies"] = {"sharpe": SHARPE_POLICY.copy(), "correlation": CORRELATION_POLICY.copy()}
+    result["baseline_metrics"] = {}
 
+    prediction_columns = (["prediction", "probability_up"]if model_config.task == "classification" else ["predicted_return"])
+
+    for prefix in ("baseline", "linear_baseline"):
+        if not all(f"{prefix}_{column}" in result_df.columns for column in prediction_columns):
+            continue
+
+        baseline_df = result_df.copy()
+        for column in prediction_columns:
+            baseline_df[column] = result_df[f"{prefix}_{column}"]
+
+        baseline_evaluation = evaluate(baseline_df, model_config)
+
+        result["baseline_metrics"][prefix] = {name: value for name, value in baseline_evaluation.items() if name not in ("predictions", "probability_up")}
+    if "linear_baseline" in result["baseline_metrics"]:
+        result["feature_baseline"] = get_feature_baseline_spec(model_config)
     if model_config.task == "classification":
         result["correct_predictions"] = int(result_df["is_correct"].sum())
         result["baseline_accuracy"] = None

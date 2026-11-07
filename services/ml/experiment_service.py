@@ -11,7 +11,8 @@ import pandas as pd
 from services.ml.model_service import DEFAULT_TRAINING_TICKERS, simulate_model, fit_prepared_model, predict_model, resolve_training_parameters, blend_predictions
 from services.ml.model_service import resolve_hybrid_parameters, apply_stacking_model
 from services.ml.stacking_service import fit_stacking_model
-from services.ml.evaluation_service import evaluate, predict_baseline
+from services.ml.evaluation_service import CORRELATION_POLICY, SCALAR_METRIC_COLUMNS, evaluate, predict_baseline
+from services.simulator_service import SHARPE_POLICY
 from services.ml.calibration_service import fit_calibrator, apply_calibrator, serialize_calibrator, restore_calibrator
 from uuid import uuid4
 import json
@@ -22,11 +23,15 @@ import joblib
 from hashlib import sha256
 from dataclasses import replace
 from copy import deepcopy
+from services.ml.baseline_service import fit_feature_baseline, get_feature_baseline_spec, predict_feature_baseline
 
 def build_result_row(ticker, model_type, result):
-    return {
+    config = result.get("model_config") or result.get("model_metadata", {}).get("config", {}) or {}
+    sharpe_policy = result.get("metric_policies", {}).get("sharpe", {})
+    row = {
         "ticker": ticker,
         "model_type": model_type,
+        "algorithm": config.get("algorithm"),
         "start_date": result["effective_test_start_date"],
         "end_date": result["effective_test_end_date"],
         "confidence_threshold": result["model_summary"]["confidence_threshold"],
@@ -42,7 +47,22 @@ def build_result_row(ticker, model_type, result):
         "buy_hold_drawdown": result["buyandhold_summary"]["max_drawdown"],
         "excess_return": (result["model_summary"]["total_return"]- result["buyandhold_summary"]["total_return"]),
         "model_exposure": result["model_summary"]["market_exposure"],
-        "transactions": result["model_summary"]["total_transactions"]}
+        "model_sharpe": result["model_summary"].get("sharpe"),
+        "buy_hold_sharpe": result["buyandhold_summary"].get("sharpe"),
+        "sharpe_sessions_per_year": sharpe_policy.get("sessions_per_year"),
+        "sharpe_annual_risk_free_rate": sharpe_policy.get("annual_risk_free_rate"),
+        "sharpe_std_ddof": sharpe_policy.get("std_ddof"),
+        "linear_baseline_algorithm": (result.get("feature_baseline") or {}).get("algorithm"),
+        "transactions": result["model_summary"]["total_transactions"]
+    }
+    for metric_name in SCALAR_METRIC_COLUMNS:
+        row[metric_name] = result.get(metric_name)
+    for baseline_name in ("baseline", "linear_baseline"):
+        metrics = result.get("baseline_metrics", {}).get(baseline_name, {})
+        for metric_name in SCALAR_METRIC_COLUMNS:
+            column = f"{baseline_name}_{metric_name}"
+            row[column] = metrics.get(metric_name, row.get(column))
+    return row
 
 def run_simulation(ticker, model_type, start_date, end_date, global_model_id=None, initial_cash=10000, fee_rate=0.001, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, *, torch_model_id=None):
     strategy_config = StrategyConfig(confidence_threshold=confidence_threshold, fee_rate=fee_rate)
@@ -99,16 +119,23 @@ def run_experiments(tickers,model_types,periods,global_model_id=None,initial_cas
 
 def summarize_results(report):
     summary = []
-
-    for model_type, group in report.groupby("model_type"):
-        row = {
-            "model_type": model_type,
+    if report.empty:
+        return pd.DataFrame(summary)
+    group_columns = [column for column in ("model_type", "algorithm", "task", "horizon", "confidence_threshold", "fee_rate") if column in report.columns]
+    for values, group in report.groupby(group_columns, dropna=False):
+        values = values if isinstance(values, tuple) else (values,)
+        row = dict(zip(group_columns, values))
+        row.update({
             "experiments": len(group),
             "wins_vs_buy_hold": len(group[(group["excess_return"] > 0)]),
             "profitable_runs": len(group[(group["model_return"] > 0)]),
             "mean_excess_return": group["excess_return"].mean(),
-            "mean_drawdown": group["model_drawdown"].mean(),
-        }
+            "mean_drawdown": group["model_drawdown"].mean()
+        })
+        for column in ("model_sharpe", "buy_hold_sharpe"):
+            if column in group.columns:
+                row[f"mean_{column}"] = group[column].mean()
+                row[f"{column}_runs"] = int(group[column].notna().sum())
         summary.append(row)
 
     return pd.DataFrame(summary)
@@ -140,7 +167,7 @@ def run_experiment(start_date, end_date):
     unseen = results[results["ticker"].isin(UNSEEN_TICKERS)]
     return seen, unseen
 
-def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_start=None, calibrate=False, progress_callback=None):
+def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_start=None, calibrate=False, progress_callback=None, include_linear_baseline=True, baseline_parameters=None):
     if calibrate and config.task != "classification":
         raise ValueError("Calibration task not supported.")
 
@@ -150,8 +177,11 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
         model, evaluation_data["test_df"], feature_columns, config, scaler)
     baseline_predictions = predict_baseline(
         evaluation_data["final_train_df"], evaluation_data["test_df"], config)
-
     predictions = {"model": test_predictions, "baseline": baseline_predictions}
+    if include_linear_baseline:
+        linear_baseline_model = fit_feature_baseline(evaluation_data["final_train_df"],feature_columns,config, parameters=baseline_parameters)
+        predictions["linear_baseline"] = predict_feature_baseline(linear_baseline_model,evaluation_data["test_df"],feature_columns,config)
+
     calibrator = None
 
     if calibrate:
@@ -177,7 +207,8 @@ def evaluate_prepared_model(evaluation_data, config, parameters, *, validation_s
         "training_details": training_details,
         "predictions": predictions,
         "metrics": metrics,
-        "cohort_metrics": cohort_metrics
+        "cohort_metrics": cohort_metrics,
+        "feature_baseline": get_feature_baseline_spec(config, baseline_parameters) if include_linear_baseline else None
     }
 
 
@@ -218,6 +249,8 @@ def build_evaluation_metadata(
         "unseen_tickers": list(evaluation_data["unseen_tickers"])}
     metadata["evaluation_news_range"] = {"start": evaluation_data["news_start"], "end": evaluation_data["news_end"]}
     metadata["calibration_enabled"] = calibrate
+    metadata["feature_baseline"] = get_feature_baseline_spec(config)
+    metadata["metric_policies"] = {"correlation": CORRELATION_POLICY.copy(), "sharpe": SHARPE_POLICY.copy()}
     dataset_names = ("selection_train_df", "validation_df", "final_train_df", "calibration_df", "seen_test_df", "unseen_test_df", "test_df")
     metadata["dataset_rows"] = {name: int(len(evaluation_data[name])) for name in dataset_names}
     if method != "single":
@@ -245,7 +278,7 @@ def save_evaluation_results(result, report_dir, evaluation_data):
                 if metric_name == "confusion_matrix":
                     row.update({name: int(count) for name, count in value.items()})
                 else:
-                    row[metric_name] = float(value)
+                    row[metric_name] = None if value is None else float(value)
 
             metric_rows.append(row)
 
@@ -306,6 +339,7 @@ def run_model_evaluation(
 
     result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start,calibrate=calibrate, progress_callback=progress_callback)
     metadata.update(result["training_details"])
+    metadata["feature_baseline"] = result["feature_baseline"]
     if calibrate:
         metadata["calibration"] = serialize_calibrator(result["calibrator"], evaluation_data["calibration_df"], config, calibration_start, test_start)
     if save_model:
@@ -326,6 +360,21 @@ def repeat_model_evaluation(report_dir, progress_callback=None):
     if method not in ("single", "blend", "stacking"):
         raise ValueError("Unsupported evaluation method")
     config = ModelConfig.from_dict(metadata["config"])
+    saved_baseline = metadata.get("feature_baseline")
+    baseline_parameters = None
+    if saved_baseline is not None:
+        if not isinstance(saved_baseline, dict) or not isinstance(saved_baseline.get("parameters"), dict):
+            raise ValueError("Invalid saved feature baseline")
+        baseline_parameters = saved_baseline["parameters"]
+        if saved_baseline != get_feature_baseline_spec(config, baseline_parameters):
+            raise ValueError("Incompatible saved feature baseline")
+    policies = {"correlation": CORRELATION_POLICY.copy(), "sharpe": SHARPE_POLICY.copy()}
+    if "metric_policies" in metadata:
+        saved_policies = deepcopy(metadata["metric_policies"])
+        if isinstance(saved_policies, dict) and isinstance(saved_policies.get("sharpe"), dict):
+            saved_policies["sharpe"] = {key: saved_policies["sharpe"].get(key) for key in SHARPE_POLICY}
+        if saved_policies != policies:
+            raise ValueError("Saved metric policies differ from the current implementation")
     calibrate = metadata.get("calibration_enabled", False)
     if calibrate:
         restore_calibrator(metadata.get("calibration"), config)
@@ -344,18 +393,19 @@ def repeat_model_evaluation(report_dir, progress_callback=None):
     evaluation_data = joblib.load(directory / "datasets.joblib")
     validation_start = metadata["evaluation_periods"]["validation_start"]
     if method == "single":
-        result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback)
+        result = evaluate_prepared_model(evaluation_data, config, parameters, validation_start=validation_start, calibrate=calibrate, progress_callback=progress_callback, include_linear_baseline=saved_baseline is not None, baseline_parameters=baseline_parameters)
     else:
         result = evaluate_hybrid_model(
             evaluation_data, config, parameters, validation_start=validation_start,
             progress_callback=progress_callback, method=method, stacking_splits=stacking_splits,
-            blend_weights=metadata.get("blend_weights"), calibrate=calibrate)
+            blend_weights=metadata.get("blend_weights"), calibrate=calibrate,
+            include_linear_baseline=saved_baseline is not None, baseline_parameters=baseline_parameters)
 
     result["source_metadata"] = metadata
     return result
 
 
-def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validation_start=None, progress_callback=None, method="blend", stacking_splits=5, blend_weights=None, calibrate=False):
+def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validation_start=None, progress_callback=None, method="blend", stacking_splits=5, blend_weights=None, calibrate=False, include_linear_baseline=True, baseline_parameters=None):
 
     if calibrate and config.task != "classification":
         raise ValueError("Calibration requires classification")
@@ -384,7 +434,7 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
     model_results = {}
     for algorithm, options in parameters.items():
         model_config = replace(config, algorithm=algorithm)
-        model_results[algorithm] = evaluate_prepared_model(evaluation_data, model_config, options, validation_start=validation_start,progress_callback=progress_callback)
+        model_results[algorithm] = evaluate_prepared_model(evaluation_data, model_config, options, validation_start=validation_start,progress_callback=progress_callback, include_linear_baseline=include_linear_baseline and not model_results, baseline_parameters=baseline_parameters)
 
     predictions = {name: result["predictions"]["model"] for name, result in model_results.items()}
     metrics = {name: result["metrics"]["model"] for name, result in model_results.items()}
@@ -412,8 +462,11 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
         metrics[calibrated_name] = evaluate(predictions[calibrated_name], config)
 
     first_result = next(iter(model_results.values()))
-    predictions["baseline"] = first_result["predictions"]["baseline"]
-    metrics["baseline"] = first_result["metrics"]["baseline"]
+    baseline_names = ("baseline", "linear_baseline") if include_linear_baseline else ("baseline",)
+    for baseline_name in baseline_names:
+        predictions[baseline_name] = (first_result["predictions"][baseline_name])
+        metrics[baseline_name] = (first_result["metrics"][baseline_name])
+
     training_tickers = evaluation_data["final_train_df"]["ticker"].unique()
     seen_mask = combined["ticker"].isin(training_tickers)
     groups = {"seen": combined.loc[seen_mask], "unseen": combined.loc[~seen_mask]}
@@ -421,9 +474,12 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
     for group_name, frame in groups.items():
         if not frame.empty:
             for algorithm, result in model_results.items():
-                group_metrics[group_name][algorithm] = result["cohort_metrics"][group_name]["model"]
-            group_metrics[group_name]["baseline"] = first_result["cohort_metrics"][group_name]["baseline"]
+                group_metrics[group_name][algorithm] = (result["cohort_metrics"][group_name]["model"])
+            for baseline_name in baseline_names:
+                group_metrics[group_name][baseline_name] = (first_result["cohort_metrics"][group_name][baseline_name])
+
             group_metrics[group_name][method] = evaluate(frame, config)
+
             if calibrate:
                 group_mask = seen_mask if group_name == "seen" else ~seen_mask
                 calibrated_frame = predictions[calibrated_name].loc[group_mask]
@@ -438,7 +494,8 @@ def evaluate_hybrid_model(evaluation_data, config, model_parameters, *, validati
         "metrics": metrics,
         "cohort_metrics": group_metrics,
         "blend_weights": blend_weights,
-        "calibrator": calibrator
+        "calibrator": calibrator,
+        "feature_baseline": first_result["feature_baseline"]
     }
 
 
@@ -455,6 +512,7 @@ def run_hybrid_evaluation(tickers, validation_start, calibration_start, test_sta
     result = evaluate_hybrid_model(evaluation_data, config, parameters, validation_start=validation_start,progress_callback=progress_callback, method=method, stacking_splits=stacking_splits,blend_weights=blend_weights, calibrate=calibrate)
 
     metadata["component_training_details"] = {name: component["training_details"] for name, component in result["model_results"].items()}
+    metadata["feature_baseline"] = result["feature_baseline"]
     if method == "stacking":
         metadata["stacking_training_details"] = deepcopy(result["stacking_training_details"])
     if method == "blend":

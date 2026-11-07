@@ -11,6 +11,7 @@ from services.ml.model_service import DEFAULT_TRAINING_TICKERS, fit_prepared_mod
 from services.ml.news_feature_service import normalize_training_news_range
 from services.simulator_service import build_backtest_result
 from services.strategy_service import StrategyConfig
+from services.ml.baseline_service import (fit_feature_baseline,predict_feature_baseline)
 
 RETRAIN_INTERVAL = 20
 
@@ -135,12 +136,15 @@ def run_walk_forward(train_df, test_df, feature_columns, config, *, date_blocks=
             training_data, config, parameters, validation_start=validation_start)
         current_test_df = predict_model(model, current_test_df, feature_columns, config, scaler)
         baseline = predict_baseline(current_train_df, current_test_df, config)
+        linear_baseline_model = fit_feature_baseline(current_train_df, feature_columns, config)
+        linear_baseline = predict_feature_baseline(linear_baseline_model,current_test_df,feature_columns,config)
 
-        if config.task == "classification":
-            current_test_df["baseline_prediction"] = baseline["prediction"].to_numpy()
-            current_test_df["baseline_probability_up"] = baseline["probability_up"].to_numpy()
-        else:
-            current_test_df["baseline_predicted_return"] = baseline["predicted_return"].to_numpy()
+        prediction_columns = (["prediction", "probability_up"]if config.task == "classification" else ["predicted_return"])
+
+        for prefix, frame in (("baseline", baseline),("linear_baseline", linear_baseline)):
+            for column in prediction_columns:
+                current_test_df[f"{prefix}_{column}"] = (frame[column].to_numpy())
+
 
         current_test_df["walk_forward_block"] = block_index
         block["training_details"] = details

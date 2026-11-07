@@ -48,6 +48,7 @@ def build_training_metadata(final_train_df, feature_columns, config, training_cu
     }
     if config.task == "classification":
         metadata["baseline_prediction"] = int(final_train_df["target"].mode().iloc[0])
+        metadata["baseline_probability_up"] = float(final_train_df["target"].mean())
         metadata["target_definition"] = f"open(t+{config.horizon + 1}) > open(t+1)"
     else:
         metadata["baseline_return"] = float(final_train_df["target_return"].mean())
